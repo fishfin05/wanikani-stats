@@ -234,6 +234,15 @@ async function init() {
     document.querySelector(".header-inner h1").after(lvlBadge);
   }
 
+  if (rawData.syncedAt) {
+    const syncEl = document.createElement("span");
+    syncEl.className = "sync-timestamp";
+    const d = new Date(rawData.syncedAt);
+    syncEl.title = `Data source: ${rawData.fromBlob ? "live sync" : "deploy snapshot"}`;
+    syncEl.textContent = `Updated ${d.toLocaleDateString(undefined, { month: "short", day: "numeric" })}`;
+    document.querySelector(".header-inner").appendChild(syncEl);
+  }
+
   setupTabs();
   setupReviewsTab();
   setupAnalyticsTab();
@@ -356,13 +365,6 @@ function buildLevelDurationChart() {
   const lps = rawData.levelProgressions.sort((a, b) => a.level - b.level);
   if (!lps.length) return;
 
-  const durations = lps.map((lp) => {
-    if (!lp.started_at) return null;
-    const end = lp.passed_at ? new Date(lp.passed_at) : new Date();
-    return +(end - new Date(lp.started_at) / 86400000).toFixed(1);
-  });
-
-  // fix: correct calculation
   const durFixed = lps.map((lp) => {
     if (!lp.started_at) return null;
     const end = lp.passed_at ? new Date(lp.passed_at) : new Date();
@@ -421,13 +423,14 @@ function buildJlptProficiency(items) {
   const JLPT_COLORS = { N5: "#4caf50", N4: "#8bc34a", N3: "#ffc107", N2: "#ff9800", N1: "#f44336" };
 
   const stats = JLPT_LEVELS.map((lvl) => {
-    const lvlItems = items.filter((i) => i.jlpt === lvl);
-    const total    = rawData.jlptTotals[lvl] ?? lvlItems.length; // full JLPT kanji count
-    const byStage  = Object.fromEntries(SRS_ORDER.map((sg) => [sg, lvlItems.filter((i) => srsGroup(i.srs_stage) === sg).length]));
-    const guruPlus = lvlItems.filter((i) => i.srs_stage >= 5).length;
-    const burned   = byStage.burned ?? 0;
-    const pct      = total ? Math.round(guruPlus / total * 100) : 0;
-    return { lvl, total, byStage, guruPlus, burned, pct };
+    const lvlItems  = items.filter((i) => i.jlpt === lvl);
+    const total     = rawData.jlptTotals[lvl] ?? lvlItems.length; // full reference-list count
+    const wkTeaches = rawData.items.filter((i) => i.type === "kanji" && i.jlpt === lvl).length;
+    const byStage   = Object.fromEntries(SRS_ORDER.map((sg) => [sg, lvlItems.filter((i) => srsGroup(i.srs_stage) === sg).length]));
+    const guruPlus  = lvlItems.filter((i) => i.srs_stage >= 5).length;
+    const burned    = byStage.burned ?? 0;
+    const pct       = total ? Math.round(guruPlus / total * 100) : 0;
+    return { lvl, total, wkTeaches, byStage, guruPlus, burned, pct };
   });
 
   // Proficiency estimate: highest level with ≥85% Guru+ of all kanji at that level
@@ -467,6 +470,10 @@ function buildJlptProficiency(items) {
     const stageDetails = SRS_ORDER.filter((sg) => s.byStage[sg] > 0)
       .map((sg) => `<span class="prof-card-srs" style="color:${SRS_COLORS[sg]}">${cap(sg)} ${s.byStage[sg]}</span>`)
       .join("");
+    const gap = s.total - s.wkTeaches;
+    const coverageNote = gap > 0
+      ? `<span class="prof-card-coverage" title="${gap} kanji in the reference list are not taught by WaniKani — max achievable via WK is ${Math.round(s.wkTeaches/s.total*100)}%">WK covers ${s.wkTeaches}/${s.total} ⚠</span>`
+      : `<span class="prof-card-coverage">WK covers all ${s.total}</span>`;
     return `
       <div class="prof-card">
         <div class="prof-card-top">
@@ -481,6 +488,7 @@ function buildJlptProficiency(items) {
           <span>${s.burned} Burned</span>
           <div class="prof-card-detail">${stageDetails || '<span style="color:var(--muted);font-size:10px">No data</span>'}</div>
         </div>
+        <div class="prof-card-coverage-row">${coverageNote}</div>
       </div>`;
   }).join("");
 
@@ -510,7 +518,10 @@ function buildJlptProficiency(items) {
               const idx = ctxItems[0]?.dataIndex;
               if (idx === undefined) return [];
               const s = stats[idx];
-              return [``, `Guru+: ${s.guruPlus}/${s.total} (${s.pct}%)`, `Burned: ${s.burned}/${s.total}`];
+              const coverageLine = s.wkTeaches < s.total
+                ? `WK covers ${s.wkTeaches}/${s.total} (max ${Math.round(s.wkTeaches/s.total*100)}% via WK)`
+                : `WK covers all ${s.total}`;
+              return [``, `Guru+: ${s.guruPlus}/${s.total} (${s.pct}%)`, `Burned: ${s.burned}/${s.total}`, coverageLine];
             },
           },
         },

@@ -1,8 +1,19 @@
 {
+  "framework": null,
+  "outputDirectory": "public",
+  "buildCommand": "",
+  "installCommand": "npm install",
+  "crons": [
+    { "path": "/api/sync", "schedule": "0 4 * * *" }
+  ],
   "functions": {
     "api/data.js": {
       "includeFiles": "data/**",
       "maxDuration": 10
+    },
+    "api/sync.js": {
+      "includeFiles": "data/**",
+      "maxDuration": 30
     },
     "api/tokenize.js": {
       "includeFiles": "node_modules/kuromoji/dict/**",

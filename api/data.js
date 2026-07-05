@@ -1,3 +1,4 @@
+import { list } from "@vercel/blob";
 import { readFileSync, existsSync } from "fs";
 import { join } from "path";
 
@@ -8,12 +9,44 @@ function loadJson(name) {
   return existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : [];
 }
 
-function buildApiData() {
-  const subjects          = loadJson("subjects");
-  const assignments       = loadJson("assignments");
-  const reviewStats       = loadJson("review_statistics");
-  const levelProgressions = loadJson("level_progressions");
-  const jlpt              = JSON.parse(readFileSync(join(DATA, "jlpt.json"), "utf8"));
+async function loadDynamic() {
+  // Try Vercel Blob first (kept fresh by daily cron)
+  try {
+    const { blobs } = await list({ prefix: "wk-dynamic" });
+    if (blobs.length > 0) {
+      const r = await fetch(blobs[0].url);
+      if (r.ok) {
+        const blob = await r.json();
+        return {
+          assignments: blob.assignments ?? [],
+          reviewStats: blob.reviewStats ?? [],
+          levelProgressions: blob.levelProgressions ?? [],
+          syncedAt: blob.syncedAt ?? null,
+          fromBlob: true,
+        };
+      }
+    }
+  } catch (e) {
+    console.warn("Blob load failed, using bundled data:", e.message);
+  }
+
+  // Fall back to bundled files (from last deploy)
+  const metaPath = join(DATA, "meta.json");
+  const meta = existsSync(metaPath) ? JSON.parse(readFileSync(metaPath, "utf8")) : {};
+  return {
+    assignments: loadJson("assignments"),
+    reviewStats: loadJson("review_statistics"),
+    levelProgressions: loadJson("level_progressions"),
+    syncedAt: meta.syncedAt ?? null,
+    fromBlob: false,
+  };
+}
+
+async function buildApiData() {
+  const subjects = loadJson("subjects");
+  const jlpt     = JSON.parse(readFileSync(join(DATA, "jlpt.json"), "utf8"));
+  const dynamic  = await loadDynamic();
+  const { assignments, reviewStats, levelProgressions, syncedAt, fromBlob } = dynamic;
 
   const assignmentBySubject = {};
   for (const a of assignments) assignmentBySubject[a.data.subject_id] = a.data;
@@ -74,10 +107,10 @@ function buildApiData() {
     passed_at:   lp.data.passed_at,
   }));
 
-  return { items, levelProgressions: levelProgs, subjectLevel, jlptTotals, currentLevel };
+  return { items, levelProgressions: levelProgs, subjectLevel, jlptTotals, currentLevel, syncedAt, fromBlob };
 }
 
-export default function handler(req, res) {
+export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   if (req.method !== "GET") {
     res.status(405).json({ error: "Method not allowed" });
@@ -85,7 +118,8 @@ export default function handler(req, res) {
   }
   try {
     res.setHeader("Cache-Control", "public, s-maxage=3600, stale-while-revalidate=86400");
-    res.status(200).json(buildApiData());
+    const data = await buildApiData();
+    res.status(200).json(data);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

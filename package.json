@@ -6,11 +6,12 @@
     "node": ">=20"
   },
   "scripts": {
-    "sync":  "node sync.js",
+    "sync": "node sync.js",
     "start": "node server.js",
-    "dev":   "node server.js"
+    "dev": "node server.js"
   },
   "dependencies": {
+    "@vercel/blob": "^2.5.0",
     "kuromoji": "^0.1.2"
   }
 }

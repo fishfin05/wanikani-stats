@@ -8,3 +8,6 @@ data/assignments.json
 data/review_statistics.json
 data/level_progressions.json
 data/reviews.json
+data/meta.json
+
+.vercel
