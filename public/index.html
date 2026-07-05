@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WaniKani Stats</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <header>
+    <div class="header-inner">
+      <h1>WaniKani Stats</h1>
+      <nav class="tabs">
+        <button class="tab active" data-tab="reviews">Reviews</button>
+        <button class="tab" data-tab="analytics">Analytics</button>
+        <button class="tab" data-tab="items">Items</button>
+        <button class="tab" data-tab="text">Text</button>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+
+    <!-- ══ REVIEWS TAB ══ -->
+    <section id="reviews-tab" class="tab-content active">
+      <div class="toolbar">
+        <label class="ctrl-label">
+          Group by
+          <select id="reviews-groupBy">
+            <option value="day">Day</option>
+            <option value="week" selected>Week</option>
+            <option value="month">Month</option>
+          </select>
+        </label>
+        <label class="ctrl-label">
+          Level grouping
+          <select id="reviews-levelGrouping">
+            <option value="individual">Each level</option>
+            <option value="5" selected>Every 5</option>
+            <option value="10">Every 10</option>
+            <option value="all">All combined</option>
+          </select>
+        </label>
+        <label class="ctrl-label">
+          Metric
+          <select id="reviews-metric">
+            <option value="guru">Items → Guru</option>
+            <option value="burned">Items → Burned</option>
+            <option value="unlocked">Items unlocked</option>
+          </select>
+        </label>
+        <label class="ctrl-label">
+          Trend line
+          <input type="checkbox" id="reviews-showTrend" checked>
+        </label>
+        <div id="reviews-filters" class="ms-row"></div>
+        <span id="reviews-count" class="stat-chip"></span>
+      </div>
+
+      <div class="charts-2col">
+        <div class="chart-card">
+          <div class="chart-title">Review activity over time</div>
+          <div class="chart-body"><canvas id="guruChart"></canvas></div>
+        </div>
+        <div class="chart-card">
+          <div class="chart-title">Days per level <span class="legend-inline"><span class="dot" style="background:#28e86e"></span>≤7d <span class="dot" style="background:#e8a228"></span>≤14d <span class="dot" style="background:#e82828"></span>&gt;14d <span class="dot" style="background:#2d3146"></span>current</span></div>
+          <div class="chart-body"><canvas id="levelDurationChart"></canvas></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ══ ANALYTICS TAB ══ -->
+    <section id="analytics-tab" class="tab-content">
+      <div class="toolbar">
+        <div id="analytics-filters" class="ms-row"></div>
+        <span id="analytics-count" class="stat-chip"></span>
+      </div>
+
+      <!-- JLPT proficiency section -->
+      <div class="prof-section">
+        <div class="prof-header">
+          <span class="prof-title">JLPT Kanji Proficiency</span>
+          <div class="prof-estimate-wrap">
+            <span class="prof-estimate-label">Estimated level</span>
+            <span id="jlpt-estimate" class="prof-estimate-val">—</span>
+            <span id="jlpt-estimate-sub" class="prof-estimate-sub"></span>
+          </div>
+        </div>
+        <div id="jlpt-cards" class="prof-cards"></div>
+        <div class="chart-card" style="margin-top:14px">
+          <div class="chart-title">Kanji by JLPT level — SRS breakdown</div>
+          <div class="chart-body" style="height:240px"><canvas id="jlptProfChart"></canvas></div>
+        </div>
+      </div>
+
+      <!-- Vocabulary JLPT proficiency section -->
+      <div class="prof-section" style="margin-top:0;margin-bottom:18px">
+        <div class="prof-header">
+          <span class="prof-title">Vocabulary — WK progress by inferred JLPT level<span class="prof-title-note">% = mastery of WK-taught vocab only, not a JLPT readiness score</span></span>
+          <div class="prof-estimate-wrap">
+            <span class="prof-estimate-label">Strongest at</span>
+            <span id="vocab-estimate" class="prof-estimate-val">—</span>
+            <span id="vocab-estimate-sub" class="prof-estimate-sub"></span>
+          </div>
+        </div>
+        <div id="vocab-cards" class="prof-cards"></div>
+        <div class="chart-card" style="margin-top:14px">
+          <div class="chart-title">Vocabulary by inferred JLPT level — SRS breakdown</div>
+          <div class="chart-body" style="height:240px"><canvas id="vocabProfChart"></canvas></div>
+        </div>
+      </div>
+
+      <div class="charts-donut-row">
+        <div class="chart-card chart-card--donut">
+          <div class="chart-title">SRS stage distribution</div>
+          <div class="chart-body"><canvas id="srsDonut"></canvas></div>
+        </div>
+        <div class="chart-card chart-card--wide">
+          <div class="chart-title">Items per WK level by SRS stage</div>
+          <div class="chart-body"><canvas id="itemsByLevel"></canvas></div>
+        </div>
+      </div>
+
+      <div class="charts-2col">
+        <div class="chart-card">
+          <div class="chart-title">Accuracy by WK level</div>
+          <div class="chart-body"><canvas id="accuracyByLevel"></canvas></div>
+        </div>
+        <div class="chart-card">
+          <div class="chart-title">Accuracy by item type</div>
+          <div class="chart-body"><canvas id="accuracyByType"></canvas></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ══ ITEMS TAB ══ -->
+    <section id="items-tab" class="tab-content">
+      <div class="toolbar">
+        <input type="text" id="items-search" placeholder="Search character, meaning, reading…">
+        <div id="items-filters" class="ms-row"></div>
+        <span id="items-count" class="stat-chip"></span>
+      </div>
+
+      <div class="table-wrap">
+        <table id="itemsTable">
+          <thead>
+            <tr>
+              <th class="sortable" data-col="characters">Character</th>
+              <th class="sortable" data-col="type">Type</th>
+              <th class="sortable" data-col="level">WK Lvl</th>
+              <th class="sortable" data-col="jlpt">JLPT</th>
+              <th>Meanings</th>
+              <th>Readings</th>
+              <th class="sortable" data-col="srs_stage">SRS Stage</th>
+              <th class="sortable" data-col="accuracy">Accuracy</th>
+            </tr>
+          </thead>
+          <tbody id="itemsBody"></tbody>
+        </table>
+      </div>
+      <div class="pagination" id="pagination"></div>
+    </section>
+
+  </main>
+
+    <!-- ══ TEXT TAB ══ -->
+    <section id="text-tab" class="tab-content">
+      <div class="text-input-card">
+        <textarea id="text-input" placeholder="Paste Japanese text here…" rows="6"></textarea>
+        <div class="text-input-footer">
+          <span class="text-input-hint">Matches WaniKani vocab and kanji (base forms). Conjugated forms fall back to individual kanji.</span>
+          <button id="text-analyze-btn" class="analyze-btn">Analyze</button>
+        </div>
+      </div>
+
+      <div id="text-results" style="display:none">
+        <div class="chart-card" style="margin-bottom:16px">
+          <div class="chart-title">
+            Annotated Text
+            <span class="legend-inline" style="font-size:10px;gap:12px">
+              <span><span class="dot" style="background:#28e86e"></span> Guru+</span>
+              <span><span class="dot" style="background:#EA9800"></span> Apprentice</span>
+              <span><span class="dot" style="background:#e82828"></span> Locked</span>
+              <span><span class="dot" style="background:#c0392b"></span> Unknown Kanji/Vocab</span>
+              <span><span class="dot" style="background:#7b8ab8"></span> Grammar/Kana</span>
+              <span><span class="dot" style="background:#4a90e2"></span> English</span>
+            </span>
+          </div>
+          <div id="text-annotated" class="text-annotated"></div>
+        </div>
+
+        <div class="charts-donut-row" style="margin-bottom:16px">
+          <div class="chart-card chart-card--donut">
+            <div class="chart-title">Knowledge Breakdown</div>
+            <div class="chart-body"><canvas id="textKnowledgeChart"></canvas></div>
+          </div>
+          <div class="chart-card">
+            <div class="chart-title">Summary</div>
+            <div id="text-stats-summary" class="text-stats-grid"></div>
+          </div>
+        </div>
+
+        <div class="chart-card">
+          <div class="chart-title">
+            Items Found
+            <span id="text-items-count" class="stat-chip" style="margin-left:auto;font-size:11px"></span>
+          </div>
+          <div class="table-wrap" style="margin-top:12px">
+            <table id="textItemsTable">
+              <thead>
+                <tr>
+                  <th>Character</th>
+                  <th>Type</th>
+                  <th>WK Level</th>
+                  <th>JLPT</th>
+                  <th>SRS Stage</th>
+                  <th>Meanings</th>
+                  <th>Readings</th>
+                </tr>
+              </thead>
+              <tbody id="textItemsBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  <div id="text-tooltip" class="text-tooltip"></div>
+
+  <div id="loading" class="overlay">
+    <div class="spinner"></div>
+    <p id="loadingMsg">Loading data…</p>
+  </div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

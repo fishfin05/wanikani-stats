@@ -1,0 +1,10 @@
+node_modules/
+.env
+.vercel/
+
+# Generated WaniKani data (re-run node sync.js to refresh)
+data/subjects.json
+data/assignments.json
+data/review_statistics.json
+data/level_progressions.json
+data/reviews.json

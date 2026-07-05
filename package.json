@@ -1,0 +1,16 @@
+{
+  "name": "wanikani-stats",
+  "version": "1.0.0",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "sync":  "node sync.js",
+    "start": "node server.js",
+    "dev":   "node server.js"
+  },
+  "dependencies": {
+    "kuromoji": "^0.1.2"
+  }
+}
