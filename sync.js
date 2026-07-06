@@ -48,6 +48,43 @@ async function fetchAll(endpoint, label) {
   return items;
 }
 
+// Only keep fields used by api/data.js — cuts subjects from ~22MB to ~700KB
+function slimSubject(s) {
+  return {
+    id: s.id,
+    type: s.object,
+    level: s.data.level,
+    characters: s.data.characters ?? s.data.slug,
+    meanings: (s.data.meanings ?? []).map((m) => m.meaning),
+    readings: (s.data.readings ?? []).map((r) => r.reading),
+  };
+}
+function slimAssignment(a) {
+  return {
+    id: a.id, subject_id: a.data.subject_id, srs_stage: a.data.srs_stage,
+    passed_at: a.data.passed_at ?? null, burned_at: a.data.burned_at ?? null,
+    unlocked_at: a.data.unlocked_at ?? null,
+  };
+}
+function slimReviewStat(s) {
+  return {
+    id: s.id, subject_id: s.data.subject_id,
+    meaning_correct: s.data.meaning_correct ?? 0,
+    meaning_incorrect: s.data.meaning_incorrect ?? 0,
+    reading_correct: s.data.reading_correct ?? 0,
+    reading_incorrect: s.data.reading_incorrect ?? 0,
+    percentage_correct: s.data.percentage_correct ?? null,
+  };
+}
+function slimLevelProg(lp) {
+  return {
+    id: lp.id, level: lp.data.level,
+    unlocked_at: lp.data.unlocked_at ?? null,
+    started_at: lp.data.started_at ?? null,
+    passed_at: lp.data.passed_at ?? null,
+  };
+}
+
 async function sync() {
   if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR);
 
@@ -55,19 +92,19 @@ async function sync() {
 
   console.log("Syncing subjects...");
   const subjects = await fetchAll("subjects?types=radical,kanji,vocabulary", "subjects");
-  writeFileSync(`${DATA_DIR}/subjects.json`, JSON.stringify(subjects));
+  writeFileSync(`${DATA_DIR}/subjects.json`, JSON.stringify(subjects.map(slimSubject)));
 
   console.log("Syncing assignments...");
   const assignments = await fetchAll("assignments", "assignments");
-  writeFileSync(`${DATA_DIR}/assignments.json`, JSON.stringify(assignments));
+  writeFileSync(`${DATA_DIR}/assignments.json`, JSON.stringify(assignments.map(slimAssignment)));
 
   console.log("Syncing review statistics...");
   const reviewStats = await fetchAll("review_statistics", "review_statistics");
-  writeFileSync(`${DATA_DIR}/review_statistics.json`, JSON.stringify(reviewStats));
+  writeFileSync(`${DATA_DIR}/review_statistics.json`, JSON.stringify(reviewStats.map(slimReviewStat)));
 
   console.log("Syncing level progressions...");
   const levelProgressions = await fetchAll("level_progressions", "level_progressions");
-  writeFileSync(`${DATA_DIR}/level_progressions.json`, JSON.stringify(levelProgressions));
+  writeFileSync(`${DATA_DIR}/level_progressions.json`, JSON.stringify(levelProgressions.map(slimLevelProg)));
 
   const syncedAt = new Date().toISOString();
   writeFileSync(`${DATA_DIR}/meta.json`, JSON.stringify({ syncedAt }));

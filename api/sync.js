@@ -28,6 +28,29 @@ async function fetchAll(endpoint, apiKey, updatedAfter) {
   return items;
 }
 
+function slimAssignment(a) {
+  if (!a.data) return a; // already slimmed
+  return { id: a.id, subject_id: a.data.subject_id, srs_stage: a.data.srs_stage,
+           passed_at: a.data.passed_at ?? null, burned_at: a.data.burned_at ?? null,
+           unlocked_at: a.data.unlocked_at ?? null };
+}
+function slimReviewStat(s) {
+  if (!s.data) return s;
+  return { id: s.id, subject_id: s.data.subject_id,
+           meaning_correct: s.data.meaning_correct ?? 0,
+           meaning_incorrect: s.data.meaning_incorrect ?? 0,
+           reading_correct: s.data.reading_correct ?? 0,
+           reading_incorrect: s.data.reading_incorrect ?? 0,
+           percentage_correct: s.data.percentage_correct ?? null };
+}
+function slimLevelProg(lp) {
+  if (!lp.data) return lp;
+  return { id: lp.id, level: lp.data.level,
+           unlocked_at: lp.data.unlocked_at ?? null,
+           started_at: lp.data.started_at ?? null,
+           passed_at: lp.data.passed_at ?? null };
+}
+
 function mergeById(existing, updates) {
   const map = new Map(existing.map((item) => [item.id, item]));
   for (const item of updates) map.set(item.id, item);
@@ -83,13 +106,18 @@ export default async function handler(req, res) {
       };
     }
 
+    // Migrate old full-format Blob to slim format in one pass
+    existing.assignments       = existing.assignments.map(slimAssignment);
+    existing.reviewStats       = existing.reviewStats.map(slimReviewStat);
+    existing.levelProgressions = existing.levelProgressions.map(slimLevelProg);
+
     const updatedAfter = existing.syncedAt;
     const syncedAt = new Date().toISOString();
 
-    // Fetch only items changed since last sync
-    const newAssignments       = await fetchAll("assignments",        apiKey, updatedAfter);
-    const newReviewStats       = await fetchAll("review_statistics",  apiKey, updatedAfter);
-    const newLevelProgressions = await fetchAll("level_progressions", apiKey, updatedAfter);
+    // Fetch only items changed since last sync, slim before merging
+    const newAssignments       = (await fetchAll("assignments",        apiKey, updatedAfter)).map(slimAssignment);
+    const newReviewStats       = (await fetchAll("review_statistics",  apiKey, updatedAfter)).map(slimReviewStat);
+    const newLevelProgressions = (await fetchAll("level_progressions", apiKey, updatedAfter)).map(slimLevelProg);
 
     const assignments       = mergeById(existing.assignments,       newAssignments);
     const reviewStats       = mergeById(existing.reviewStats,       newReviewStats);
