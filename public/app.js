@@ -400,9 +400,14 @@ function setupReviewsTab() {
     document.getElementById(id).addEventListener("change", buildGuruChart);
   });
 
+  document.getElementById("pace-override").addEventListener("input", () => buildPaceEta());
+  document.getElementById("pace-reset-btn").addEventListener("click", () => {
+    document.getElementById("pace-override").value = "";
+    buildPaceEta();
+  });
+
   buildGuruChart();
-  buildLevelDurationChart();
-  buildPaceEta();
+  buildPaceEta(); // also (re)builds the milestones row and the projected level-duration chart
 }
 
 // ── PACE / ETA ───────────────────────────────────────────────────────────────
@@ -424,12 +429,36 @@ function median(nums) {
   return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
 }
 
+function getCurrentLevelInfo() {
+  const lps = rawData.levelProgressions ?? [];
+  const current = lps.find((lp) => lp.started_at && !lp.passed_at);
+  const currentLevel = rawData.currentLevel || current?.level || lps.at(-1)?.level || 1;
+  return { lps, current, currentLevel };
+}
+
+// The auto-computed pace (median days/level, floor-bounded) — set by
+// buildPaceEta and read by buildMilestones/buildLevelDurationChart so the
+// three stay in sync. Overridden by #pace-override when the user sets one.
+let defaultPaceDays = null;
+function getEffectivePace() {
+  const input = document.getElementById("pace-override");
+  const val = input?.value ? parseFloat(input.value) : NaN;
+  if (!isNaN(val) && val > 0) return val;
+  return defaultPaceDays;
+}
+
 function buildPaceEta() {
   const el = document.getElementById("pace-banner");
   if (!el) return;
 
-  const lps = rawData.levelProgressions ?? [];
-  if (!lps.length) { el.innerHTML = `<span class="pace-note">Not enough level history yet to estimate pace.</span>`; return; }
+  const { lps, current, currentLevel } = getCurrentLevelInfo();
+  if (!lps.length) {
+    el.innerHTML = `<span class="pace-note">Not enough level history yet to estimate pace.</span>`;
+    defaultPaceDays = null;
+    buildMilestones();
+    buildLevelDurationChart();
+    return;
+  }
 
   const completedDays = lps
     .filter((lp) => lp.started_at && lp.passed_at)
@@ -440,30 +469,70 @@ function buildPaceEta() {
   const recent = completedDays.slice(-RECENT_N);
   const med = median(recent);
 
-  const current = lps.find((lp) => lp.started_at && !lp.passed_at);
-  const currentLevel = rawData.currentLevel || current?.level || lps.at(-1)?.level || 1;
   const floor = levelFloorDays(currentLevel);
-  const pace = med !== null ? Math.max(med, floor) : floor;
+  const autoPace = med !== null ? Math.max(med, floor) : floor;
+  defaultPaceDays = autoPace;
+
+  const overrideInput = document.getElementById("pace-override");
+  if (overrideInput) overrideInput.placeholder = `auto (${autoPace.toFixed(1)})`;
+  const pace = getEffectivePace();
+  const adjusted = Math.abs(pace - autoPace) > 0.01;
 
   const stats = [];
 
   if (current) {
     const elapsed = (Date.now() - new Date(current.started_at)) / 86400000;
     const remaining = Math.max(0, pace - elapsed);
-    stats.push({ val: remaining < 1 ? "<1" : `~${Math.round(remaining)}`, label: `days to Lv ${currentLevel + 1}` });
+    stats.push({ val: remaining < 1 ? "<1" : `~${Math.round(remaining)}`, label: `days to Lv ${currentLevel + 1}${adjusted ? " (adjusted)" : ""}` });
   }
 
   stats.push({ val: med !== null ? med.toFixed(1) : "—", label: med !== null ? `median days/level (last ${recent.length})` : "median days/level" });
   stats.push({ val: floor.toFixed(1), label: "fastest possible (SRS floor)" });
 
   const levelsLeft = 60 - currentLevel;
-  if (levelsLeft > 0 && med !== null) {
+  if (levelsLeft > 0) {
     const eta = new Date(Date.now() + levelsLeft * pace * 86400000);
-    stats.push({ val: eta.toLocaleDateString(undefined, { year: "numeric", month: "short" }), label: "Lv 60 at this pace" });
+    stats.push({ val: eta.toLocaleDateString(undefined, { year: "numeric", month: "short" }), label: `Lv 60 at ${adjusted ? "adjusted" : "this"} pace` });
   }
 
   el.innerHTML = stats.map((s) => `<div class="pace-stat"><span class="pace-val">${s.val}</span><span class="pace-label">${s.label}</span></div>`).join("");
-  el.title = "\"Fastest possible\" reflects WaniKani's fixed SRS review intervals and the ~90%-of-kanji-to-Guru leveling rule — nobody can level up faster than this, regardless of settings. \"Median\" is your own recent pace, which is what actually drives the ETA.";
+  el.title = "\"Fastest possible\" reflects WaniKani's fixed SRS review intervals and the ~90%-of-kanji-to-Guru leveling rule — nobody can level up faster than this, regardless of settings. \"Median\" is your own recent pace, which is what actually drives the ETA unless you set your own pace below.";
+
+  buildMilestones();
+  buildLevelDurationChart();
+}
+
+// ── MILESTONES ───────────────────────────────────────────────────────────────
+// Level 60 alone is a long way off — intermediate checkpoints (every 10
+// levels) give something closer to look forward to, all driven by the same
+// (optionally overridden) pace as the ETA banner above.
+const MILESTONE_LEVELS = [10, 20, 30, 40, 50, 60];
+function buildMilestones() {
+  const el = document.getElementById("milestones-row");
+  if (!el) return;
+
+  const { current, currentLevel } = getCurrentLevelInfo();
+  const pace = getEffectivePace();
+  if (!pace) { el.innerHTML = ""; return; }
+
+  const elapsedCurrent = current ? Math.max(0, (Date.now() - new Date(current.started_at)) / 86400000) : 0;
+
+  el.innerHTML = MILESTONE_LEVELS.map((lv) => {
+    if (lv <= currentLevel) {
+      return `<div class="milestone-card milestone-card--done">
+        <span class="milestone-lv">Lv ${lv}${lv === 60 ? " (max)" : ""}</span>
+        <span class="milestone-date milestone-date--done">Reached ✓</span>
+      </div>`;
+    }
+    const levelsAway = lv - currentLevel;
+    const daysFromNow = Math.max(0, pace - elapsedCurrent) + Math.max(0, levelsAway - 1) * pace;
+    const eta = new Date(Date.now() + daysFromNow * 86400000);
+    return `<div class="milestone-card">
+      <span class="milestone-lv">Lv ${lv}${lv === 60 ? " (max)" : ""}</span>
+      <span class="milestone-date">${eta.toLocaleDateString(undefined, { year: "numeric", month: "short" })}</span>
+      <span class="milestone-days">~${Math.round(daysFromNow)}d away</span>
+    </div>`;
+  }).join("");
 }
 
 function periodKey(dateStr, groupBy) {
@@ -552,7 +621,7 @@ function buildGuruChart() {
 }
 
 function buildLevelDurationChart() {
-  const lps = rawData.levelProgressions.sort((a, b) => a.level - b.level);
+  const lps = rawData.levelProgressions.slice().sort((a, b) => a.level - b.level);
   if (!lps.length) return;
 
   const durFixed = lps.map((lp) => {
@@ -561,18 +630,35 @@ function buildLevelDurationChart() {
     return Math.round((end - new Date(lp.started_at)) / 86400000 * 10) / 10;
   });
 
+  // Projected bars for levels not reached yet, out to 60, using the same
+  // (optionally overridden) pace driving the ETA banner and milestones —
+  // gives a visual "runway" instead of just history stopping at today.
+  const pace = getEffectivePace();
+  const lastKnownLevel = lps.at(-1)?.level ?? 0;
+  const projectedLevels = [];
+  if (pace) for (let lv = lastKnownLevel + 1; lv <= 60; lv++) projectedLevels.push(lv);
+
+  const labels = [...lps.map((lp) => `Lv ${lp.level}`), ...projectedLevels.map((lv) => `Lv ${lv}`)];
+  const data   = [...durFixed, ...projectedLevels.map(() => pace)];
+  const bg = [
+    ...durFixed.map((d, i) => !lps[i].passed_at ? "#2d3146" : d <= 7 ? "#28e86e88" : d <= 14 ? "#e8a22888" : "#e8282888"),
+    ...projectedLevels.map((lv) => MILESTONE_LEVELS.includes(lv) ? "#4a90e288" : "#4a519055"),
+  ];
+  const border = [
+    ...durFixed.map((d, i) => !lps[i].passed_at ? "#4a5180" : d <= 7 ? "#28e86e" : d <= 14 ? "#e8a228" : "#e82828"),
+    ...projectedLevels.map((lv) => MILESTONE_LEVELS.includes(lv) ? "#4a90e2" : "#4a5190"),
+  ];
+
   destroyChart("levelDuration");
   charts.levelDuration = new Chart(document.getElementById("levelDurationChart").getContext("2d"), {
     type: "bar",
     data: {
-      labels: lps.map((lp) => `Lv ${lp.level}`),
+      labels,
       datasets: [{
         label: "Days",
-        data: durFixed,
-        backgroundColor: durFixed.map((d, i) =>
-          !lps[i].passed_at ? "#2d3146" : d <= 7 ? "#28e86e88" : d <= 14 ? "#e8a22888" : "#e8282888"),
-        borderColor: durFixed.map((d, i) =>
-          !lps[i].passed_at ? "#4a5180" : d <= 7 ? "#28e86e" : d <= 14 ? "#e8a228" : "#e82828"),
+        data,
+        backgroundColor: bg,
+        borderColor: border,
         borderWidth: 1,
       }],
     },
@@ -580,10 +666,19 @@ function buildLevelDurationChart() {
       responsive: true, maintainAspectRatio: false,
       plugins: {
         legend: { display: false },
-        tooltip: { callbacks: { label: (ctx) => `${ctx.raw ?? "—"} days${!lps[ctx.dataIndex].passed_at ? " (in progress)" : ""}` } },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => {
+              const idx = ctx.dataIndex;
+              if (idx < lps.length) return `${ctx.raw ?? "—"} days${!lps[idx].passed_at ? " (in progress)" : ""}`;
+              const lv = projectedLevels[idx - lps.length];
+              return `~${ctx.raw} days (projected${MILESTONE_LEVELS.includes(lv) ? " — milestone" : ""})`;
+            },
+          },
+        },
       },
       scales: {
-        x: { ...BASE_SCALES.x },
+        x: { ...BASE_SCALES.x, ticks: { ...BASE_SCALES.x.ticks, maxRotation: 90, autoSkip: true, maxTicksLimit: 30 } },
         y: { ...BASE_SCALES.y, title: { display: true, text: "Days", color: "#7a80a0" } },
       },
     },
