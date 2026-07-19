@@ -238,21 +238,8 @@ function getFiltered(tabKey) {
 }
 
 // ── init ─────────────────────────────────────────────────────────────────────
-// The sticky table-header offset (--header-h) has to match the site header's
-// *real* rendered height, not a guess — the header's content changes after
-// data loads (level badge, sync timestamp get appended below), which can
-// change its height on some viewport widths. Re-measure whenever that's
-// possible rather than trusting a hardcoded px value.
-function syncHeaderHeight() {
-  const header = document.querySelector("header");
-  if (header) document.documentElement.style.setProperty("--header-h", `${header.offsetHeight}px`);
-}
-window.addEventListener("resize", syncHeaderHeight);
-if (document.fonts?.ready) document.fonts.ready.then(syncHeaderHeight).catch(() => {});
-
 async function init() {
   showLoading("Loading data…");
-  syncHeaderHeight();
   try {
     const res = await fetch("/api/data");
     if (!res.ok) throw new Error(await res.text());
@@ -277,8 +264,6 @@ async function init() {
     syncEl.textContent = `Updated ${d.toLocaleDateString(undefined, { month: "short", day: "numeric" })}`;
     document.querySelector(".header-inner").appendChild(syncEl);
   }
-
-  syncHeaderHeight(); // re-measure now that the badge/timestamp above may have changed it
 
   setupTabs();
   setupSettings();
@@ -423,6 +408,7 @@ function setupReviewsTab() {
 
   buildGuruChart();
   buildPaceEta(); // also (re)builds the milestones row and the projected level-duration chart
+  buildJlptKanjiMilestones();
 }
 
 // ── PACE / ETA ───────────────────────────────────────────────────────────────
@@ -800,7 +786,7 @@ function buildJlptProficiency(items) {
   for (let i = JLPT_LEVELS.length - 1; i >= 0; i--) {
     const s = stats[i];
     if (!s.total) continue;
-    if (s.pct >= 85) {
+    if (s.pct >= JLPT_READY_PCT) {
       estimateText  = JLPT_LEVELS[i];
       estimateSub   = `${s.guruPlus}/${s.total} ${JLPT_LEVELS[i]} kanji at Guru+`;
       estimateColor = JLPT_COLORS[JLPT_LEVELS[i]];
@@ -939,7 +925,7 @@ function buildVocabProficiency(items) {
   for (let i = JLPT_LEVELS.length - 1; i >= 0; i--) {
     const s = stats[i];
     if (!s.total) continue;
-    if (s.pct >= 85) {
+    if (s.pct >= JLPT_READY_PCT) {
       estimateText  = JLPT_LEVELS[i];
       estimateSub   = `${s.guruPlus}/${s.total} ${JLPT_LEVELS[i]} vocab at Guru+`;
       estimateColor = JLPT_COLORS[JLPT_LEVELS[i]];
@@ -1095,6 +1081,74 @@ function computeItemWeeklyRate(days = 90) {
   const cutoff = Date.now() - days * 86400000;
   const recentPasses = rawData.items.filter((i) => i.passed_at && new Date(i.passed_at).getTime() >= cutoff).length;
   return recentPasses / (days / 7);
+}
+
+// Same bar buildJlptProficiency uses for its "Estimated level" badge — kept
+// as one constant so the milestones below can't quietly drift from it.
+const JLPT_READY_PCT = 85;
+
+// ── JLPT KANJI MILESTONES ────────────────────────────────────────────────────
+// Vocab is deliberately excluded here (unlike the WK-level milestones above):
+// WK's coverage of the reference vocab list collapses at N2/N1 (~36%/~31%
+// ceilings, see the JLPT Vocabulary Proficiency section), so a pace-based ETA
+// for "N1 vocab" would just be fiction. Kanji coverage stays high enough
+// (95-100% through N3, ~83% at N1) that an ETA — or an honest "not reachable
+// via WK alone" — actually means something.
+function buildJlptKanjiMilestones() {
+  const el = document.getElementById("jlpt-milestones-row");
+  if (!el) return;
+
+  const JLPT_LEVELS = ["N5", "N4", "N3", "N2", "N1"];
+  const weeklyRate = computeItemWeeklyRate();
+  const kanjiAll = rawData.items.filter((i) => i.type === "kanji" && i.jlpt);
+
+  el.innerHTML = JLPT_LEVELS.map((lvl) => {
+    const total  = rawData.jlptTotals?.[lvl] ?? 0;
+    const items  = kanjiAll.filter((i) => i.jlpt === lvl);
+    const wkTeaches = items.length; // how many reference-list kanji at this level WK actually has
+    const guruPlus  = items.filter((i) => i.srs_stage >= 5).length;
+    const pct = total ? Math.round(guruPlus / total * 100) : 0;
+    const cefr = CEFR_REF[lvl];
+    const cefrBadge = `<span class="milestone-cefr" title="${escHtml(cefr.title)}">≈${cefr.label}</span>`;
+
+    if (pct >= JLPT_READY_PCT) {
+      return `<div class="milestone-card milestone-card--done">
+        <span class="milestone-lv">${lvl} kanji${cefrBadge}</span>
+        <span class="milestone-date milestone-date--done">Reached ✓</span>
+      </div>`;
+    }
+
+    const targetGuru = Math.ceil(total * JLPT_READY_PCT / 100);
+    if (wkTeaches < targetGuru) {
+      // Guru-ing every single kanji WK teaches at this level still wouldn't
+      // clear the threshold — this is a reference-list coverage gap, not
+      // something more studying fixes, so don't pretend there's an ETA.
+      const ceiling = total ? Math.round(wkTeaches / total * 100) : 0;
+      return `<div class="milestone-card">
+        <span class="milestone-lv">${lvl} kanji${cefrBadge}</span>
+        <span class="milestone-blocked" title="WK only teaches ${wkTeaches}/${total} reference-list kanji at ${lvl} — capped at ${ceiling}%, below the ${JLPT_READY_PCT}% bar.">Capped at ${ceiling}% via WK</span>
+      </div>`;
+    }
+
+    const remaining = Math.max(0, targetGuru - guruPlus);
+    let dateHtml, subLabel;
+    if (remaining <= 0) {
+      dateHtml = "—"; subLabel = "";
+    } else if (weeklyRate > 0) {
+      const weeksAway = remaining / weeklyRate;
+      const eta = new Date(Date.now() + weeksAway * 7 * 86400000);
+      dateHtml = eta.toLocaleDateString(undefined, { year: "numeric", month: "short" });
+      subLabel = weeksAway < 1 ? "<1 week away" : `~${Math.round(weeksAway)}wk away`;
+    } else {
+      dateHtml = "—"; subLabel = "not enough recent pace data";
+    }
+
+    return `<div class="milestone-card">
+      <span class="milestone-lv">${lvl} kanji${cefrBadge}</span>
+      <span class="milestone-date">${dateHtml}</span>
+      <span class="milestone-days">${subLabel}</span>
+    </div>`;
+  }).join("");
 }
 
 function buildJlptGap() {
