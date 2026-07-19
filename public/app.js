@@ -346,6 +346,68 @@ function setupReviewsTab() {
 
   buildGuruChart();
   buildLevelDurationChart();
+  buildPaceEta();
+}
+
+// ── PACE / ETA ───────────────────────────────────────────────────────────────
+// WaniKani's SRS review intervals are fixed (not user-configurable), so they set
+// a hard floor on how fast anyone can level up: Apprentice1→Guru1 takes
+// 4h+8h+1d+2d on levels 3+, halved on levels 1-2. Leveling also requires
+// Guru-ing ~90% of the current level's kanji. See:
+// https://knowledge.wanikani.com/wanikani/srs-stages/
+// https://knowledge.wanikani.com/wanikani/getting-started/level-up/
+const SRS_FLOOR_DAYS_STANDARD = (4 + 8 + 24 + 48) / 24;
+const SRS_FLOOR_DAYS_FAST     = (2 + 4 + 8 + 24) / 24;
+function levelFloorDays(level) {
+  return level <= 2 ? SRS_FLOOR_DAYS_FAST : SRS_FLOOR_DAYS_STANDARD;
+}
+function median(nums) {
+  if (!nums.length) return null;
+  const s = [...nums].sort((a, b) => a - b);
+  const mid = s.length >> 1;
+  return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+}
+
+function buildPaceEta() {
+  const el = document.getElementById("pace-banner");
+  if (!el) return;
+
+  const lps = rawData.levelProgressions ?? [];
+  if (!lps.length) { el.innerHTML = `<span class="pace-note">Not enough level history yet to estimate pace.</span>`; return; }
+
+  const completedDays = lps
+    .filter((lp) => lp.started_at && lp.passed_at)
+    .sort((a, b) => new Date(a.passed_at) - new Date(b.passed_at))
+    .map((lp) => (new Date(lp.passed_at) - new Date(lp.started_at)) / 86400000);
+
+  const RECENT_N = 8;
+  const recent = completedDays.slice(-RECENT_N);
+  const med = median(recent);
+
+  const current = lps.find((lp) => lp.started_at && !lp.passed_at);
+  const currentLevel = rawData.currentLevel || current?.level || lps.at(-1)?.level || 1;
+  const floor = levelFloorDays(currentLevel);
+  const pace = med !== null ? Math.max(med, floor) : floor;
+
+  const stats = [];
+
+  if (current) {
+    const elapsed = (Date.now() - new Date(current.started_at)) / 86400000;
+    const remaining = Math.max(0, pace - elapsed);
+    stats.push({ val: remaining < 1 ? "<1" : `~${Math.round(remaining)}`, label: `days to Lv ${currentLevel + 1}` });
+  }
+
+  stats.push({ val: med !== null ? med.toFixed(1) : "—", label: med !== null ? `median days/level (last ${recent.length})` : "median days/level" });
+  stats.push({ val: floor.toFixed(1), label: "fastest possible (SRS floor)" });
+
+  const levelsLeft = 60 - currentLevel;
+  if (levelsLeft > 0 && med !== null) {
+    const eta = new Date(Date.now() + levelsLeft * pace * 86400000);
+    stats.push({ val: eta.toLocaleDateString(undefined, { year: "numeric", month: "short" }), label: "Lv 60 at this pace" });
+  }
+
+  el.innerHTML = stats.map((s) => `<div class="pace-stat"><span class="pace-val">${s.val}</span><span class="pace-label">${s.label}</span></div>`).join("");
+  el.title = "\"Fastest possible\" reflects WaniKani's fixed SRS review intervals and the ~90%-of-kanji-to-Guru leveling rule — nobody can level up faster than this, regardless of settings. \"Median\" is your own recent pace, which is what actually drives the ETA.";
 }
 
 function periodKey(dateStr, groupBy) {
@@ -612,26 +674,28 @@ function buildVocabProficiency(items) {
   const JLPT_LEVELS  = ["N5", "N4", "N3", "N2", "N1"];
   const JLPT_COLORS  = { N5: "#4caf50", N4: "#8bc34a", N3: "#ffc107", N2: "#ff9800", N1: "#f44336" };
 
+  // total = every WK vocab item inferred at this level, locked or not — same
+  // "denominator is the full scope, not just what you've seen" shape as the
+  // kanji metric above, so the two percentages mean comparable things. The
+  // scope itself still differs (WK's own vocab list vs. an external kanji
+  // reference list) — see the section note for what that does and doesn't cover.
   const stats = JLPT_LEVELS.map((lvl) => {
     const lvlItems = vocab.filter((i) => i.jlpt === lvl);
-    const unlocked = lvlItems.filter((i) => i.srs_stage >= 0);
-    const total    = unlocked.length; // only vocab WK has actually taught
+    const total    = lvlItems.length;
     const byStage  = Object.fromEntries(SRS_ORDER.map((sg) => [sg, lvlItems.filter((i) => srsGroup(i.srs_stage) === sg).length]));
-    const guruPlus = unlocked.filter((i) => i.srs_stage >= 5).length;
+    const guruPlus = lvlItems.filter((i) => i.srs_stage >= 5).length;
     const burned   = byStage.burned ?? 0;
     const pct      = total ? Math.round(guruPlus / total * 100) : 0;
     return { lvl, total, byStage, guruPlus, burned, pct };
   });
 
-  // Require at least 50 unlocked items before a level counts toward the estimate
-  const MIN_VOCAB = 50;
   let estimateText = "Beginner", estimateSub = "Keep studying!", estimateColor = "#7a80a0";
   for (let i = JLPT_LEVELS.length - 1; i >= 0; i--) {
     const s = stats[i];
-    if (s.total < MIN_VOCAB) continue;
+    if (!s.total) continue;
     if (s.pct >= 85) {
       estimateText  = JLPT_LEVELS[i];
-      estimateSub   = `${s.guruPlus}/${s.total} unlocked ${JLPT_LEVELS[i]} vocab at Guru+`;
+      estimateSub   = `${s.guruPlus}/${s.total} WK-taught ${JLPT_LEVELS[i]} vocab at Guru+`;
       estimateColor = JLPT_COLORS[JLPT_LEVELS[i]];
       break;
     }
@@ -639,9 +703,9 @@ function buildVocabProficiency(items) {
   if (estimateText === "Beginner") {
     for (let i = 0; i < JLPT_LEVELS.length; i++) {
       const s = stats[i];
-      if (s.total >= MIN_VOCAB && s.pct > 0) {
+      if (s.pct > 0) {
         estimateText  = `~${JLPT_LEVELS[i]}`;
-        estimateSub   = `working toward ${JLPT_LEVELS[i]} (${s.pct}% of unlocked vocab at Guru+)`;
+        estimateSub   = `working toward ${JLPT_LEVELS[i]} (${s.pct}% of WK-taught vocab at Guru+)`;
         estimateColor = JLPT_COLORS[JLPT_LEVELS[i]];
         break;
       }
@@ -659,18 +723,17 @@ function buildVocabProficiency(items) {
     const stageDetails = SRS_ORDER.filter((sg) => s.byStage[sg] > 0)
       .map((sg) => `<span class="prof-card-srs" style="color:${SRS_COLORS[sg]}">${cap(sg)} ${s.byStage[sg]}</span>`)
       .join("");
-    const enoughData = s.total >= MIN_VOCAB;
     return `
       <div class="prof-card">
         <div class="prof-card-top">
           <span class="prof-card-level badge ${jc}">${s.lvl}</span>
-          ${enoughData
-            ? `<span class="prof-card-pct" style="color:${barColor(s.pct)}">${s.pct}%</span>`
-            : `<span class="prof-card-pct" style="color:var(--muted);font-size:10px">${s.total} studied</span>`}
+          <span class="prof-card-pct" style="color:${barColor(s.pct)}">${s.pct}%</span>
         </div>
-        ${enoughData ? `<div class="prof-card-bar-wrap"><div class="prof-card-bar-fill" style="width:${s.pct}%;background:${barColor(s.pct)}"></div></div>` : ""}
+        <div class="prof-card-bar-wrap">
+          <div class="prof-card-bar-fill" style="width:${s.pct}%;background:${barColor(s.pct)}"></div>
+        </div>
         <div class="prof-card-stats">
-          <span class="prof-card-guru">${s.guruPlus} Guru+</span>
+          <span class="prof-card-guru">${s.guruPlus}/${s.total} Guru+</span>
           <span>${s.burned} Burned</span>
           <div class="prof-card-detail">${stageDetails || '<span style="color:var(--muted);font-size:10px">No data</span>'}</div>
         </div>
