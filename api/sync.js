@@ -140,6 +140,7 @@ export default async function handler(req, res) {
     await put("wk-dynamic.json", JSON.stringify({ syncedAt, assignments, reviewStats, levelProgressions }), {
       access: "private",
       addRandomSuffix: false,
+      allowOverwrite: true,
     });
 
     const elapsed = ((Date.now() - started) / 1000).toFixed(1);
