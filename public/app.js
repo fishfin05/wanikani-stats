@@ -630,6 +630,7 @@ function buildJlptProficiency(items) {
   estEl.textContent = estimateText;
   estEl.style.color = estimateColor;
   document.getElementById("jlpt-estimate-sub").textContent = estimateSub;
+  setCefrBadge("jlpt-estimate-cefr", estimateText);
 
   // Summary cards
   const barColor = (pct) => pct >= 85 ? "#28e86e" : pct >= 50 ? "#e8a228" : pct >= 20 ? "#e86228" : "#e82828";
@@ -641,7 +642,9 @@ function buildJlptProficiency(items) {
       .join("");
     const gap = s.total - s.wkTeaches;
     const coverageNote = gap > 0
-      ? `<span class="prof-card-coverage" title="${gap} kanji in the reference list are not taught by WaniKani — max achievable via WK is ${Math.round(s.wkTeaches/s.total*100)}%">WK covers ${s.wkTeaches}/${s.total} ⚠</span>`
+      ? `<span class="prof-card-coverage" title="${gap} kanji in the reference list are not taught by WaniKani — max achievable via WK is ${Math.round(s.wkTeaches/s.total*100)}%">WK covers ${s.wkTeaches}/${s.total} ⚠</span>
+         <button class="gap-toggle" type="button" data-target="kanji-gap-${s.lvl}" data-kind="kanji" data-lvl="${s.lvl}" data-show-label="show missing (${gap})" data-hide-label="hide">show missing (${gap})</button>
+         <div class="gap-list" id="kanji-gap-${s.lvl}"></div>`
       : `<span class="prof-card-coverage">WK covers all ${s.total}</span>`;
     return `
       <div class="prof-card">
@@ -751,6 +754,7 @@ function buildVocabProficiency(items) {
   document.getElementById("vocab-estimate").textContent  = estimateText;
   document.getElementById("vocab-estimate").style.color  = estimateColor;
   document.getElementById("vocab-estimate-sub").textContent = estimateSub;
+  setCefrBadge("vocab-estimate-cefr", estimateText);
 
   const barColor = (pct) => pct >= 85 ? "#28e86e" : pct >= 50 ? "#e8a228" : pct >= 20 ? "#e86228" : "#e82828";
 
@@ -761,7 +765,9 @@ function buildVocabProficiency(items) {
       .join("");
     const gap = s.total - s.wkTeaches;
     const coverageNote = gap > 0
-      ? `<span class="prof-card-coverage" title="${gap} words on the reference list aren't taught by WaniKani (or didn't match exactly due to kana/kanji spelling differences) — max achievable via WK is ${Math.round(s.wkTeaches/s.total*100)}%">WK covers ${s.wkTeaches}/${s.total} ⚠</span>`
+      ? `<span class="prof-card-coverage" title="${gap} words on the reference list aren't taught by WaniKani (or didn't match exactly due to kana/kanji spelling differences) — max achievable via WK is ${Math.round(s.wkTeaches/s.total*100)}%">WK covers ${s.wkTeaches}/${s.total} ⚠</span>
+         <button class="gap-toggle" type="button" data-target="vocab-gap-${s.lvl}" data-kind="vocab" data-lvl="${s.lvl}" data-show-label="show missing (${gap})" data-hide-label="hide">show missing (${gap})</button>
+         <div class="gap-list" id="vocab-gap-${s.lvl}"></div>`
       : `<span class="prof-card-coverage">WK covers all ${s.total}</span>`;
     return `
       <div class="prof-card">
@@ -833,6 +839,39 @@ const CEFR_REF = {
   N2: { label: "B1 / B2", title: "JLPT's official reference: N2 passers score 90–111 → B1, 112+ → B2." },
   N1: { label: "B2 / C1", title: "JLPT's official reference: N1 passers score 100–141 → B2, 142+ → C1. JLPT tops out at C1 (no C2)." },
 };
+
+function setCefrBadge(elId, levelText) {
+  const el = document.getElementById(elId);
+  if (!el) return;
+  const cefr = CEFR_REF[levelText.replace(/^~/, "")];
+  if (cefr) {
+    el.textContent = `≈ CEFR ${cefr.label}`;
+    el.title = cefr.title;
+    el.style.display = "";
+  } else {
+    el.textContent = "";
+    el.style.display = "none";
+  }
+}
+
+// Lazily populate + toggle the "show missing" chip lists in the kanji/vocab
+// proficiency cards (rendering thousands of chips upfront for N1 vocab isn't
+// worth it if nobody clicks to see them).
+document.addEventListener("click", (e) => {
+  const btn = e.target.closest(".gap-toggle");
+  if (!btn) return;
+  const list = document.getElementById(btn.dataset.target);
+  if (!list) return;
+  const showing = list.style.display === "flex";
+  if (!showing && !list.dataset.rendered) {
+    const source = btn.dataset.kind === "vocab" ? rawData.jlptGapVocab : rawData.jlptGapKanji;
+    const arr = source?.[btn.dataset.lvl] ?? [];
+    list.innerHTML = arr.map((c) => `<span class="gap-chip">${escHtml(c)}</span>`).join("");
+    list.dataset.rendered = "1";
+  }
+  list.style.display = showing ? "none" : "flex";
+  btn.textContent = showing ? btn.dataset.showLabel : btn.dataset.hideLabel;
+});
 
 function computeItemWeeklyRate(days = 90) {
   const cutoff = Date.now() - days * 86400000;

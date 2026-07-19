@@ -67,6 +67,20 @@ async function buildApiData() {
   const vocabTotals = {};
   for (const level of Object.values(jlptVocab)) vocabTotals[level] = (vocabTotals[level] || 0) + 1;
 
+  // Which reference-list entries WK doesn't teach at all, per level — lets the
+  // UI show the actual characters/words behind the "WK covers X/Y ⚠" note
+  // instead of just a count.
+  const wkKanjiChars = new Set(subjects.filter((s) => s.type === "kanji").map((s) => s.characters));
+  const wkVocabWords = new Set(subjects.filter((s) => s.type === "vocabulary").map((s) => s.characters));
+  const jlptGapKanji = {};
+  for (const [ch, lvl] of Object.entries(jlpt)) {
+    if (!wkKanjiChars.has(ch)) (jlptGapKanji[lvl] ??= []).push(ch);
+  }
+  const jlptGapVocab = {};
+  for (const [word, lvl] of Object.entries(jlptVocab)) {
+    if (!wkVocabWords.has(word)) (jlptGapVocab[lvl] ??= []).push(word);
+  }
+
   const currentLevel = levelProgressions.reduce((max, lp) =>
     lp.started_at ? Math.max(max, lp.level) : max, 0);
 
@@ -114,7 +128,7 @@ async function buildApiData() {
     passed_at:   lp.passed_at,
   }));
 
-  return { items, levelProgressions: levelProgs, subjectLevel, jlptTotals, vocabTotals, currentLevel, syncedAt, fromBlob };
+  return { items, levelProgressions: levelProgs, subjectLevel, jlptTotals, vocabTotals, jlptGapKanji, jlptGapVocab, currentLevel, syncedAt, fromBlob };
 }
 
 export default async function handler(req, res) {

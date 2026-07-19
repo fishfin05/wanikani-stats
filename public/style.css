@@ -230,6 +230,11 @@ tr:hover td { background: rgba(255,255,255,.02); }
 .prof-estimate-wrap { display: flex; align-items: center; gap: 10px; }
 .prof-estimate-label { font-size: 12px; color: var(--muted); }
 .prof-estimate-val { font-size: 28px; font-weight: 800; letter-spacing: 1px; transition: color .3s; }
+.prof-estimate-cefr {
+  font-size: 12px; font-weight: 700; color: var(--muted);
+  background: var(--border); padding: 2px 8px; border-radius: 999px;
+  cursor: help;
+}
 .prof-estimate-sub { font-size: 12px; color: var(--muted); }
 
 .prof-cards { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; }
@@ -258,6 +263,21 @@ tr:hover td { background: rgba(255,255,255,.02); }
   font-size: 10px; color: var(--muted);
 }
 .prof-card-coverage[title] { cursor: help; text-decoration: underline dotted; }
+.gap-toggle {
+  background: none; border: none; color: var(--accent); font-size: 10px;
+  cursor: pointer; text-decoration: underline; padding: 0; margin-left: 6px;
+}
+.gap-toggle:hover { opacity: .8; }
+.gap-list {
+  display: none; flex-wrap: wrap; gap: 4px; margin-top: 8px;
+  max-height: 120px; overflow-y: auto; padding: 7px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+}
+.gap-chip {
+  font-size: 12px; background: var(--border); color: var(--text);
+  padding: 1px 6px; border-radius: 4px;
+  font-family: "Noto Sans JP","Hiragino Sans","Yu Gothic",sans-serif;
+}
 .sync-timestamp {
   font-size: 11px; color: var(--muted);
   cursor: default; flex-shrink: 0;
