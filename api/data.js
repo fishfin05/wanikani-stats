@@ -43,9 +43,10 @@ async function loadDynamic() {
 }
 
 async function buildApiData() {
-  const subjects = loadJson("subjects");
-  const jlpt     = JSON.parse(readFileSync(join(DATA, "jlpt.json"), "utf8"));
-  const dynamic  = await loadDynamic();
+  const subjects   = loadJson("subjects");
+  const jlpt       = JSON.parse(readFileSync(join(DATA, "jlpt.json"), "utf8"));
+  const jlptVocab  = JSON.parse(readFileSync(join(DATA, "jlpt_vocab.json"), "utf8"));
+  const dynamic    = await loadDynamic();
   const { assignments, reviewStats, levelProgressions, syncedAt, fromBlob } = dynamic;
 
   const assignmentBySubject = {};
@@ -59,6 +60,12 @@ async function buildApiData() {
 
   const jlptTotals = {};
   for (const level of Object.values(jlpt)) jlptTotals[level] = (jlptTotals[level] || 0) + 1;
+
+  // Reference-list totals for the vocab proficiency metric — see data/SOURCES.md.
+  // Only ~53% of WK vocab has an exact match in this list; unmatched words are
+  // simply not counted toward JLPT-vocab percentages (not guessed at).
+  const vocabTotals = {};
+  for (const level of Object.values(jlptVocab)) vocabTotals[level] = (vocabTotals[level] || 0) + 1;
 
   const currentLevel = levelProgressions.reduce((max, lp) =>
     lp.started_at ? Math.max(max, lp.level) : max, 0);
@@ -87,6 +94,7 @@ async function buildApiData() {
       meanings:          s.meanings,
       readings:          s.readings,
       jlpt:              jlptForChars(s.characters),
+      jlptExact:         s.type === "vocabulary" ? (jlptVocab[s.characters] ?? null) : null,
       srs_stage:         asgn.srs_stage ?? -1,
       passed_at:         asgn.passed_at ?? null,
       burned_at:         asgn.burned_at ?? null,
@@ -106,7 +114,7 @@ async function buildApiData() {
     passed_at:   lp.passed_at,
   }));
 
-  return { items, levelProgressions: levelProgs, subjectLevel, jlptTotals, currentLevel, syncedAt, fromBlob };
+  return { items, levelProgressions: levelProgs, subjectLevel, jlptTotals, vocabTotals, currentLevel, syncedAt, fromBlob };
 }
 
 export default async function handler(req, res) {

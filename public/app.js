@@ -539,6 +539,7 @@ function setupAnalyticsTab() {
   const container = document.getElementById("analytics-filters");
   makeFilters("analytics", container, ["type", "level", "jlpt", "srs"], () => buildAnalyticsCharts());
   buildAnalyticsCharts();
+  buildJlptGap(); // independent of the type/level/jlpt/srs filters above — always shows the full picture
 }
 
 function buildAnalyticsCharts() {
@@ -669,24 +670,25 @@ function buildJlptProficiency(items) {
 }
 
 function buildVocabProficiency(items) {
-  // Use all vocabulary regardless of the type filter so the section is always populated
-  const vocab = rawData.items.filter((i) => i.type === "vocabulary" && i.jlpt);
+  // Uses an external JLPT vocabulary reference list (data/jlpt_vocab.json,
+  // see data/SOURCES.md) so this metric has the same shape as the kanji one:
+  // total = the full reference list for that level, not just what WK teaches.
+  // Only words WK actually has as a subject AND that match the list exactly
+  // (item.jlptExact) count toward wkTeaches/guruPlus — unmatched WK vocab is
+  // excluded rather than guessed at (see the coverage note below).
+  const vocab = rawData.items.filter((i) => i.type === "vocabulary" && i.jlptExact);
   const JLPT_LEVELS  = ["N5", "N4", "N3", "N2", "N1"];
   const JLPT_COLORS  = { N5: "#4caf50", N4: "#8bc34a", N3: "#ffc107", N2: "#ff9800", N1: "#f44336" };
 
-  // total = every WK vocab item inferred at this level, locked or not — same
-  // "denominator is the full scope, not just what you've seen" shape as the
-  // kanji metric above, so the two percentages mean comparable things. The
-  // scope itself still differs (WK's own vocab list vs. an external kanji
-  // reference list) — see the section note for what that does and doesn't cover.
   const stats = JLPT_LEVELS.map((lvl) => {
-    const lvlItems = vocab.filter((i) => i.jlpt === lvl);
-    const total    = lvlItems.length;
-    const byStage  = Object.fromEntries(SRS_ORDER.map((sg) => [sg, lvlItems.filter((i) => srsGroup(i.srs_stage) === sg).length]));
-    const guruPlus = lvlItems.filter((i) => i.srs_stage >= 5).length;
-    const burned   = byStage.burned ?? 0;
-    const pct      = total ? Math.round(guruPlus / total * 100) : 0;
-    return { lvl, total, byStage, guruPlus, burned, pct };
+    const lvlItems  = vocab.filter((i) => i.jlptExact === lvl);
+    const total     = rawData.vocabTotals?.[lvl] ?? lvlItems.length; // full reference-list count
+    const wkTeaches = lvlItems.length; // of that list, how many WK has as a matching subject
+    const byStage   = Object.fromEntries(SRS_ORDER.map((sg) => [sg, lvlItems.filter((i) => srsGroup(i.srs_stage) === sg).length]));
+    const guruPlus  = lvlItems.filter((i) => i.srs_stage >= 5).length;
+    const burned    = byStage.burned ?? 0;
+    const pct       = total ? Math.round(guruPlus / total * 100) : 0;
+    return { lvl, total, wkTeaches, byStage, guruPlus, burned, pct };
   });
 
   let estimateText = "Beginner", estimateSub = "Keep studying!", estimateColor = "#7a80a0";
@@ -695,7 +697,7 @@ function buildVocabProficiency(items) {
     if (!s.total) continue;
     if (s.pct >= 85) {
       estimateText  = JLPT_LEVELS[i];
-      estimateSub   = `${s.guruPlus}/${s.total} WK-taught ${JLPT_LEVELS[i]} vocab at Guru+`;
+      estimateSub   = `${s.guruPlus}/${s.total} ${JLPT_LEVELS[i]} vocab at Guru+`;
       estimateColor = JLPT_COLORS[JLPT_LEVELS[i]];
       break;
     }
@@ -705,7 +707,7 @@ function buildVocabProficiency(items) {
       const s = stats[i];
       if (s.pct > 0) {
         estimateText  = `~${JLPT_LEVELS[i]}`;
-        estimateSub   = `working toward ${JLPT_LEVELS[i]} (${s.pct}% of WK-taught vocab at Guru+)`;
+        estimateSub   = `working toward ${JLPT_LEVELS[i]} (${s.pct}% of ${JLPT_LEVELS[i]} vocab at Guru+)`;
         estimateColor = JLPT_COLORS[JLPT_LEVELS[i]];
         break;
       }
@@ -723,6 +725,10 @@ function buildVocabProficiency(items) {
     const stageDetails = SRS_ORDER.filter((sg) => s.byStage[sg] > 0)
       .map((sg) => `<span class="prof-card-srs" style="color:${SRS_COLORS[sg]}">${cap(sg)} ${s.byStage[sg]}</span>`)
       .join("");
+    const gap = s.total - s.wkTeaches;
+    const coverageNote = gap > 0
+      ? `<span class="prof-card-coverage" title="${gap} words on the reference list aren't taught by WaniKani (or didn't match exactly due to kana/kanji spelling differences) — max achievable via WK is ${Math.round(s.wkTeaches/s.total*100)}%">WK covers ${s.wkTeaches}/${s.total} ⚠</span>`
+      : `<span class="prof-card-coverage">WK covers all ${s.total}</span>`;
     return `
       <div class="prof-card">
         <div class="prof-card-top">
@@ -737,6 +743,7 @@ function buildVocabProficiency(items) {
           <span>${s.burned} Burned</span>
           <div class="prof-card-detail">${stageDetails || '<span style="color:var(--muted);font-size:10px">No data</span>'}</div>
         </div>
+        <div class="prof-card-coverage-row">${coverageNote}</div>
       </div>`;
   }).join("");
 
@@ -765,7 +772,10 @@ function buildVocabProficiency(items) {
               const idx = ctxItems[0]?.dataIndex;
               if (idx === undefined) return [];
               const s = stats[idx];
-              return [``, `Guru+: ${s.guruPlus}/${s.total} (${s.pct}%)`, `Burned: ${s.burned}/${s.total}`, `(JLPT level inferred from kanji in word)`];
+              const coverageLine = s.wkTeaches < s.total
+                ? `WK covers ${s.wkTeaches}/${s.total} (max ${Math.round(s.wkTeaches/s.total*100)}% via WK)`
+                : `WK covers all ${s.total}`;
+              return [``, `Guru+: ${s.guruPlus}/${s.total} (${s.pct}%)`, `Burned: ${s.burned}/${s.total}`, coverageLine];
             },
           },
         },
@@ -776,6 +786,79 @@ function buildVocabProficiency(items) {
       },
     },
   });
+}
+
+// ── PATH TO JLPT (gap widget) ───────────────────────────────────────────────
+// Official JLPT→CEFR reference mapping (reading/listening only, requires
+// passing that JLPT level, score-dependent within N3/N2/N1):
+// https://www.jlpt.jp/e/about/cefr_reference.html
+const CEFR_REF = {
+  N5: { label: "A1",     title: "JLPT's official reference: N5 passers scoring 80+ map to CEFR A1." },
+  N4: { label: "A2",     title: "JLPT's official reference: N4 passers scoring 90+ map to CEFR A2." },
+  N3: { label: "A2 / B1", title: "JLPT's official reference: N3 passers score 95–103 → A2, 104+ → B1." },
+  N2: { label: "B1 / B2", title: "JLPT's official reference: N2 passers score 90–111 → B1, 112+ → B2." },
+  N1: { label: "B2 / C1", title: "JLPT's official reference: N1 passers score 100–141 → B2, 142+ → C1. JLPT tops out at C1 (no C2)." },
+};
+
+function computeItemWeeklyRate(days = 90) {
+  const cutoff = Date.now() - days * 86400000;
+  const recentPasses = rawData.items.filter((i) => i.passed_at && new Date(i.passed_at).getTime() >= cutoff).length;
+  return recentPasses / (days / 7);
+}
+
+function buildJlptGap() {
+  const tbody = document.getElementById("jlptGapBody");
+  if (!tbody) return;
+
+  const JLPT_LEVELS = ["N5", "N4", "N3", "N2", "N1"];
+  const weeklyRate = computeItemWeeklyRate();
+
+  const kanjiAll = rawData.items.filter((i) => i.type === "kanji" && i.jlpt);
+  const vocabAll = rawData.items.filter((i) => i.type === "vocabulary" && i.jlptExact);
+
+  const bucket = (arr) => ({
+    guru:       arr.filter((i) => i.srs_stage >= 5).length,
+    locked:     arr.filter((i) => i.srs_stage === -1).length,
+    inProgress: arr.filter((i) => i.srs_stage >= 0 && i.srs_stage <= 4).length,
+  });
+
+  const remainingCell = (total, wkTeaches, b) => {
+    const remaining = total - b.guru;
+    if (remaining <= 0) return { html: `<span style="color:#28e86e">All ${total} at Guru+ ✓</span>`, remainingWk: 0 };
+    const notTaught = total - wkTeaches;
+    const detail = [`${b.locked} locked`, `${b.inProgress} in progress`, notTaught > 0 ? `${notTaught} not taught by WK` : null]
+      .filter(Boolean).join(" · ");
+    return { html: `<strong>${remaining}</strong> left <span style="color:var(--muted);font-size:11px">(${detail})</span>`, remainingWk: b.locked + b.inProgress };
+  };
+
+  tbody.innerHTML = JLPT_LEVELS.map((lvl) => {
+    const kanjiTotal = rawData.jlptTotals?.[lvl] ?? 0;
+    const kanjiItems = kanjiAll.filter((i) => i.jlpt === lvl);
+    const kanjiB = bucket(kanjiItems);
+    const kanjiCell = remainingCell(kanjiTotal, kanjiItems.length, kanjiB);
+
+    const vocabTotal = rawData.vocabTotals?.[lvl] ?? 0;
+    const vocabItems = vocabAll.filter((i) => i.jlptExact === lvl);
+    const vocabB = bucket(vocabItems);
+    const vocabCell = remainingCell(vocabTotal, vocabItems.length, vocabB);
+
+    const wkTeachableRemaining = kanjiCell.remainingWk + vocabCell.remainingWk;
+    let etaText = "—";
+    if (wkTeachableRemaining > 0) {
+      etaText = weeklyRate > 0
+        ? (wkTeachableRemaining / weeklyRate < 1 ? "<1 week" : `~${Math.round(wkTeachableRemaining / weeklyRate)} weeks`)
+        : "not enough recent pace data";
+    }
+
+    const cefr = CEFR_REF[lvl];
+    return `<tr>
+      <td><span class="badge jlpt-${lvl}">${lvl}</span></td>
+      <td><span title="${escHtml(cefr.title)}" style="cursor:help;text-decoration:underline dotted">${cefr.label}</span></td>
+      <td>${kanjiCell.html}</td>
+      <td>${vocabCell.html}</td>
+      <td>${etaText}</td>
+    </tr>`;
+  }).join("");
 }
 
 function buildSrsDonut(items) {

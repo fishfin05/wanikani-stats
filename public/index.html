@@ -125,7 +125,7 @@
       <!-- Vocabulary JLPT proficiency section -->
       <div class="prof-section" style="margin-top:0;margin-bottom:18px">
         <div class="prof-header">
-          <span class="prof-title">Vocabulary — WK progress by inferred JLPT level<span class="prof-title-note">% of all WaniKani vocab inferred at this level (locked + unlocked) · WK's own list only, not the full JLPT vocabulary · not a readiness score</span></span>
+          <span class="prof-title">JLPT Vocabulary Proficiency<span class="prof-title-note">% of an unofficial reference word list · JLPT does not publish an official vocab list · not a readiness score</span></span>
           <div class="prof-estimate-wrap">
             <span class="prof-estimate-label">Strongest at</span>
             <span id="vocab-estimate" class="prof-estimate-val">—</span>
@@ -134,9 +134,36 @@
         </div>
         <div id="vocab-cards" class="prof-cards"></div>
         <div class="chart-card" style="margin-top:14px">
-          <div class="chart-title">Vocabulary by inferred JLPT level — SRS breakdown</div>
+          <div class="chart-title">Vocabulary by JLPT level — SRS breakdown</div>
           <div class="chart-body" style="height:240px"><canvas id="vocabProfChart"></canvas></div>
         </div>
+      </div>
+
+      <!-- Path-to-JLPT gap widget -->
+      <div class="chart-card" style="margin-bottom:18px">
+        <div class="chart-title">
+          Path to Each JLPT Level — What's Left
+          <span class="legend-inline" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0">
+            CEFR column reflects <a href="https://www.jlpt.jp/e/about/cefr_reference.html" target="_blank" rel="noopener" style="color:var(--muted)">JLPT's own official reference mapping</a> (reading/listening only, requires passing — see tooltip)
+          </span>
+        </div>
+        <div class="table-wrap" style="margin-top:12px">
+          <table id="jlptGapTable">
+            <thead>
+              <tr>
+                <th>Level</th>
+                <th>CEFR (official ref.)</th>
+                <th>Kanji remaining</th>
+                <th>Vocab remaining</th>
+                <th>Est. time at your pace</th>
+              </tr>
+            </thead>
+            <tbody id="jlptGapBody"></tbody>
+          </table>
+        </div>
+        <p class="text-input-hint" style="margin-top:10px">
+          "Remaining" and the time estimate only cover items WaniKani actually teaches — kanji/vocab it doesn't teach at all need outside study and are called out separately. Time estimate is based on your own recent Guru-pace across all item types (see the Pace &amp; ETA banner on the Reviews tab), not a fixed schedule.
+        </p>
       </div>
 
       <div class="charts-donut-row">

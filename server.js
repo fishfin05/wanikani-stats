@@ -39,6 +39,7 @@ function buildApiData() {
   const reviewStats       = loadJson("review_statistics");
   const levelProgressions = loadJson("level_progressions");
   const jlpt              = JSON.parse(readFileSync(resolve(__dirname, "data/jlpt.json"), "utf8"));
+  const jlptVocab          = JSON.parse(readFileSync(resolve(__dirname, "data/jlpt_vocab.json"), "utf8"));
 
   const assignmentBySubject = {};
   for (const a of assignments) assignmentBySubject[a.subject_id] = a;
@@ -51,6 +52,10 @@ function buildApiData() {
 
   const jlptTotals = {};
   for (const level of Object.values(jlpt)) jlptTotals[level] = (jlptTotals[level] || 0) + 1;
+
+  // Reference-list totals for the vocab proficiency metric — see data/SOURCES.md.
+  const vocabTotals = {};
+  for (const level of Object.values(jlptVocab)) vocabTotals[level] = (vocabTotals[level] || 0) + 1;
 
   const currentLevel = levelProgressions.reduce((max, lp) =>
     lp.started_at ? Math.max(max, lp.level) : max, 0);
@@ -80,6 +85,7 @@ function buildApiData() {
       meanings:          s.meanings ?? [],
       readings:          s.readings ?? [],
       jlpt:              jlptForChars(chars),
+      jlptExact:         s.type === "vocabulary" ? (jlptVocab[chars] ?? null) : null,
       srs_stage:         asgn.srs_stage ?? -1,
       passed_at:         asgn.passed_at ?? null,
       burned_at:         asgn.burned_at ?? null,
@@ -101,7 +107,7 @@ function buildApiData() {
 
   const metaPath = `${DATA}/meta.json`;
   const meta = existsSync(metaPath) ? JSON.parse(readFileSync(metaPath, "utf8")) : {};
-  return { items, levelProgressions: levelProgs, subjectLevel, jlptTotals, currentLevel, syncedAt: meta.syncedAt ?? null, fromBlob: false };
+  return { items, levelProgressions: levelProgs, subjectLevel, jlptTotals, vocabTotals, currentLevel, syncedAt: meta.syncedAt ?? null, fromBlob: false };
 }
 
 const server = createServer((req, res) => {
