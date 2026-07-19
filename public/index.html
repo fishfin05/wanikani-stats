@@ -91,12 +91,12 @@
       <div id="pace-banner" class="pace-banner"></div>
 
       <div class="pace-adjust-row">
+        <span class="pace-adjust-hint">Pace above is fully automatic — WaniKani has no "target pace" setting, so this is computed from your last 8 completed levels. Want to try a hypothetical instead?</span>
         <label class="ctrl-label" for="pace-override">
-          Assumed pace (days/level)
+          Try a different pace (days/level)
           <input type="number" id="pace-override" min="0.5" step="0.1" placeholder="auto">
         </label>
-        <button id="pace-reset-btn" class="settings-btn-secondary" type="button" title="Clear the override and go back to your own recent pace">Reset to my pace</button>
-        <span class="pace-adjust-hint">Drives the ETA above, the milestones below, and the projected bars on the Days-per-level chart.</span>
+        <button id="pace-reset-btn" class="settings-btn-secondary" type="button" title="Clear the hypothetical and go back to your own real pace">Back to my real pace</button>
       </div>
 
       <div id="milestones-row" class="milestones-row"></div>
@@ -250,6 +250,8 @@
       </div>
 
       <div id="text-results" style="display:none">
+        <div id="text-readiness" class="text-readiness"></div>
+
         <div class="chart-card" style="margin-bottom:16px">
           <div class="chart-title">
             Annotated Text

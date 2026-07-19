@@ -1627,6 +1627,30 @@ function renderTextBreakdown(tokens) {
     });
   }
 
+  // "Am I ready for this?" verdict, based on known-word text-coverage thresholds
+  // from reading-comprehension research (Hu & Nation, 2000): ~98% coverage for
+  // comfortable comprehension, ~95% as the rough floor for extensive reading
+  // without constant lookups. Only Guru+/grammar/English count as "known" —
+  // Apprentice items are recent and shaky, so they're left out of the
+  // percentage on purpose (shown separately) rather than flattering the score.
+  const solidKnown = guruPlus + grammar + english;
+  const knownPct   = total ? Math.round(solidKnown / total * 100) : 0;
+  const readiness  =
+    knownPct >= 98 ? { label: "Comfortable — should read smoothly",        color: "#28e86e" } :
+    knownPct >= 95 ? { label: "Workable — expect occasional lookups",      color: "#8bc34a" } :
+    knownPct >= 90 ? { label: "Rough going — frequent lookups",            color: "#e8a228" } :
+                      { label: "Too far above your level right now",        color: "#e82828" };
+  const readinessEl = document.getElementById("text-readiness");
+  if (readinessEl) {
+    readinessEl.innerHTML = total ? `
+      <span class="text-readiness-val" style="color:${readiness.color}">${knownPct}%</span>
+      <span class="text-readiness-sub">
+        <strong style="color:${readiness.color}">${readiness.label}</strong> — ${solidKnown}/${total} unique items solidly known (Guru+, grammar/kana, or English), ${apprentice} more at Apprentice (shaky, not counted).
+        Based on reading-research thresholds: ~98% known text ≈ comfortable comprehension, ~95% ≈ workable extensive reading, below that expect real friction.
+        This is kanji/vocab recognition only — grammar knowledge isn't measured here and matters just as much.
+      </span>` : "";
+  }
+
   document.getElementById("text-stats-summary").innerHTML =
     slices.map((s) => {
       const pct = total ? Math.round(s.value / total * 100) : 0;

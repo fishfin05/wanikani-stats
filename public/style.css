@@ -198,7 +198,11 @@ input[type="checkbox"] { accent-color: var(--accent); width: 15px; height: 15px;
   background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
   overflow-x: auto; overflow-y: hidden;
 }
-table { width: 100%; border-collapse: collapse; }
+/* border-collapse: collapse breaks position:sticky on cells (browsers don't
+   correctly clip/repaint collapsed borders under a sticky cell, producing
+   the ghosted-row-showing-through-the-header glitch) — separate + zero
+   spacing gives the same visual look without the conflict. */
+table { width: 100%; border-collapse: separate; border-spacing: 0; }
 /* Sticky on individual th cells, not the thead group — position:sticky on
    <thead> (display:table-header-group) is unreliable across browsers and is
    what caused the header to jump/overlap table rows on scroll. */
@@ -507,6 +511,14 @@ tr:hover td { background: rgba(255,255,255,.02); }
 .tt-readings { font-size: 11px; color: var(--muted); margin-top: 3px; }
 
 /* Stats summary — 1:1 with donut slices */
+.text-readiness {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+  padding: 16px 20px; margin-bottom: 16px;
+  display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+}
+.text-readiness-val { font-size: 22px; font-weight: 800; }
+.text-readiness-sub { font-size: 12px; color: var(--muted); flex: 1; min-width: 220px; }
+
 .text-stats-grid { display: flex; flex-direction: column; justify-content: center; gap: 0; height: 100%; padding: 4px 0; }
 .text-stat-row {
   display: flex; align-items: center; gap: 10px;
