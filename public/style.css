@@ -216,6 +216,20 @@ tr:hover td { background: rgba(255,255,255,.02); }
 .srs-enlightened { color: var(--srs-enlightened); }
 .srs-burned      { color: #777; }
 
+/* ── whole-collection stats (no JLPT reference list) ── */
+.overall-stats-row {
+  display: flex; flex-wrap: wrap; gap: 14px; margin-bottom: 16px;
+}
+.overall-stat {
+  flex: 1; min-width: 220px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+  padding: 14px 18px; display: flex; flex-direction: column; gap: 4px;
+}
+.overall-stat-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted); }
+.overall-stat-hint { cursor: help; opacity: 0.7; text-decoration: underline dotted; }
+.overall-stat-val { font-size: 26px; font-weight: 800; color: var(--text); line-height: 1.1; }
+.overall-stat-sub { font-size: 11px; color: var(--muted); }
+
 /* ── JLPT proficiency section ── */
 .prof-section {
   background: var(--surface); border: 1px solid var(--border);
@@ -237,18 +251,24 @@ tr:hover td { background: rgba(255,255,255,.02); }
 }
 .prof-estimate-sub { font-size: 12px; color: var(--muted); }
 
-.prof-cards { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; }
-@media (max-width: 900px) { .prof-cards { grid-template-columns: repeat(3, 1fr); } }
-@media (max-width: 600px) { .prof-cards { grid-template-columns: 1fr 1fr; } }
+.prof-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
 
 .prof-card {
   background: var(--bg); border: 1px solid var(--border);
   border-radius: 9px; padding: 14px 12px;
   display: flex; flex-direction: column; gap: 8px;
 }
-.prof-card-top { display: flex; align-items: center; justify-content: space-between; }
+.prof-card--untagged { border-style: dashed; }
+.prof-card-top { display: flex; align-items: center; gap: 6px; }
 .prof-card-level { font-size: 13px; font-weight: 700; padding: 3px 9px; border-radius: 5px; }
-.prof-card-pct { font-size: 20px; font-weight: 800; }
+.prof-card-other { background: var(--border); color: var(--muted); cursor: help; }
+.prof-card-cefr {
+  font-size: 10px; font-weight: 700; color: var(--muted);
+  background: var(--border); padding: 2px 6px; border-radius: 999px;
+  cursor: help; white-space: nowrap;
+}
+.prof-card-pct { font-size: 20px; font-weight: 800; margin-left: auto; }
+.prof-card-pctwk { opacity: 0.85; }
 .prof-card-bar-wrap { height: 5px; background: var(--border); border-radius: 3px; overflow: hidden; }
 .prof-card-bar-fill { height: 100%; border-radius: 3px; transition: width .5s ease; }
 .prof-card-stats { font-size: 11px; color: var(--muted); display: flex; flex-direction: column; gap: 2px; }

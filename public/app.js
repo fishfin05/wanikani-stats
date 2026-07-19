@@ -574,6 +574,34 @@ function setupAnalyticsTab() {
   makeFilters("analytics", container, ["type", "level", "jlpt", "srs"], () => buildAnalyticsCharts());
   buildAnalyticsCharts();
   buildJlptGap(); // independent of the type/level/jlpt/srs filters above — always shows the full picture
+  buildOverallStats(); // ditto — whole-collection totals, not JLPT-reference-relative
+}
+
+// ── WHOLE-COLLECTION STATS ───────────────────────────────────────────────────
+// "Axis 1": plain % of everything WaniKani itself teaches, with no JLPT
+// reference list involved at all — so words/kanji the reference list doesn't
+// cover can't drag this number down. Always uses the unfiltered item set.
+function buildOverallStats() {
+  const summarize = (arr) => {
+    const guruPlus = arr.filter((i) => i.srs_stage >= 5).length;
+    const burned   = arr.filter((i) => i.srs_stage === 9).length;
+    return { total: arr.length, guruPlus, burned, pct: arr.length ? Math.round(guruPlus / arr.length * 100) : 0 };
+  };
+  const k = summarize(rawData.items.filter((i) => i.type === "kanji"));
+  const v = summarize(rawData.items.filter((i) => i.type === "vocabulary"));
+
+  document.getElementById("overallStatsRow").innerHTML = `
+    <div class="overall-stat">
+      <span class="overall-stat-label">All WaniKani kanji <span class="overall-stat-hint" title="No JLPT reference list involved — every kanji WaniKani teaches, period. This is the only 100%-is-actually-100% number on this page.">(?)</span></span>
+      <span class="overall-stat-val">${k.pct}%</span>
+      <span class="overall-stat-sub">${k.guruPlus}/${k.total} Guru+ · ${k.burned} Burned</span>
+    </div>
+    <div class="overall-stat">
+      <span class="overall-stat-label">All WaniKani vocab <span class="overall-stat-hint" title="No JLPT reference list involved — every vocab word WaniKani teaches, period. This is the only 100%-is-actually-100% number on this page.">(?)</span></span>
+      <span class="overall-stat-val">${v.pct}%</span>
+      <span class="overall-stat-sub">${v.guruPlus}/${v.total} Guru+ · ${v.burned} Burned</span>
+    </div>
+  `;
 }
 
 function buildAnalyticsCharts() {
@@ -585,6 +613,38 @@ function buildAnalyticsCharts() {
   buildItemsByLevel(items);
   buildAccuracyByLevel(items);
   buildAccuracyByType(items);
+}
+
+// Renders the trailing "Other" card for items WK teaches that never matched
+// any JLPT reference-list entry — so nothing learned is invisible, it just
+// has no JLPT level to sort under. Uses the same WK-only-denominator % as
+// buildOverallStats, since there's no reference-list total to divide by here.
+function renderUntaggedCard(kind, untaggedItems) {
+  const byStage  = Object.fromEntries(SRS_ORDER.map((sg) => [sg, untaggedItems.filter((i) => srsGroup(i.srs_stage) === sg).length]));
+  const guruPlus = untaggedItems.filter((i) => i.srs_stage >= 5).length;
+  const burned   = byStage.burned ?? 0;
+  const total    = untaggedItems.length;
+  const pct      = total ? Math.round(guruPlus / total * 100) : 0;
+  const barColor = (p) => p >= 85 ? "#28e86e" : p >= 50 ? "#e8a228" : p >= 20 ? "#e86228" : "#e82828";
+  const stageDetails = SRS_ORDER.filter((sg) => byStage[sg] > 0)
+    .map((sg) => `<span class="prof-card-srs" style="color:${SRS_COLORS[sg]}">${cap(sg)} ${byStage[sg]}</span>`)
+    .join("");
+  return `
+    <div class="prof-card prof-card--untagged">
+      <div class="prof-card-top">
+        <span class="prof-card-level badge prof-card-other" title="${kind} WaniKani teaches that aren't on the unofficial JLPT reference list at all — no JLPT level applies to them.">Other</span>
+        <span class="prof-card-pct" style="color:${barColor(pct)}">${pct}%</span>
+      </div>
+      <div class="prof-card-bar-wrap">
+        <div class="prof-card-bar-fill" style="width:${pct}%;background:${barColor(pct)}"></div>
+      </div>
+      <div class="prof-card-stats">
+        <span class="prof-card-guru">${guruPlus}/${total} Guru+</span>
+        <span>${burned} Burned</span>
+        <div class="prof-card-detail">${stageDetails || '<span style="color:var(--muted);font-size:10px">No data</span>'}</div>
+      </div>
+      <div class="prof-card-coverage-row"><span class="prof-card-coverage">Not on any JLPT reference list — ${total} ${kind}, learned but untracked by level</span></div>
+    </div>`;
 }
 
 function buildJlptProficiency(items) {
@@ -599,7 +659,8 @@ function buildJlptProficiency(items) {
     const guruPlus  = lvlItems.filter((i) => i.srs_stage >= 5).length;
     const burned    = byStage.burned ?? 0;
     const pct       = total ? Math.round(guruPlus / total * 100) : 0;
-    return { lvl, total, wkTeaches, byStage, guruPlus, burned, pct };
+    const pctOfWk   = wkTeaches ? Math.round(guruPlus / wkTeaches * 100) : 0;
+    return { lvl, total, wkTeaches, byStage, guruPlus, burned, pct, pctOfWk };
   });
 
   // Proficiency estimate: highest level with ≥85% Guru+ of all kanji at that level
@@ -646,10 +707,12 @@ function buildJlptProficiency(items) {
          <button class="gap-toggle" type="button" data-target="kanji-gap-${s.lvl}" data-kind="kanji" data-lvl="${s.lvl}" data-show-label="show missing (${gap})" data-hide-label="hide">show missing (${gap})</button>
          <div class="gap-list" id="kanji-gap-${s.lvl}"></div>`
       : `<span class="prof-card-coverage">WK covers all ${s.total}</span>`;
+    const cefr = CEFR_REF[s.lvl];
     return `
       <div class="prof-card">
         <div class="prof-card-top">
           <span class="prof-card-level badge ${jc}">${s.lvl}</span>
+          ${cefr ? `<span class="prof-card-cefr" title="${cefr.title}">${cefr.label}</span>` : ""}
           <span class="prof-card-pct" style="color:${barColor(s.pct)}">${s.pct}%</span>
         </div>
         <div class="prof-card-bar-wrap">
@@ -658,11 +721,12 @@ function buildJlptProficiency(items) {
         <div class="prof-card-stats">
           <span class="prof-card-guru">${s.guruPlus}/${s.total} Guru+</span>
           <span>${s.burned} Burned</span>
+          ${s.wkTeaches ? `<span class="prof-card-pctwk" title="Of the ${s.wkTeaches} reference-list kanji WK actually teaches at ${s.lvl}, ${s.pctOfWk}% are Guru+ or higher — this ignores kanji WK doesn't teach, unlike the headline %.">${s.pctOfWk}% of WK-taught</span>` : ""}
           <div class="prof-card-detail">${stageDetails || '<span style="color:var(--muted);font-size:10px">No data</span>'}</div>
         </div>
         <div class="prof-card-coverage-row">${coverageNote}</div>
       </div>`;
-  }).join("");
+  }).join("") + renderUntaggedCard("kanji", rawData.items.filter((i) => i.type === "kanji" && !i.jlpt));
 
   // Horizontal stacked bar chart
   const datasets = SRS_ORDER.map((sg) => ({
@@ -725,7 +789,8 @@ function buildVocabProficiency(items) {
     const guruPlus  = lvlItems.filter((i) => i.srs_stage >= 5).length;
     const burned    = byStage.burned ?? 0;
     const pct       = total ? Math.round(guruPlus / total * 100) : 0;
-    return { lvl, total, wkTeaches, byStage, guruPlus, burned, pct };
+    const pctOfWk   = wkTeaches ? Math.round(guruPlus / wkTeaches * 100) : 0;
+    return { lvl, total, wkTeaches, byStage, guruPlus, burned, pct, pctOfWk };
   });
 
   let estimateText = "Beginner", estimateSub = "Keep studying!", estimateColor = "#7a80a0";
@@ -769,10 +834,12 @@ function buildVocabProficiency(items) {
          <button class="gap-toggle" type="button" data-target="vocab-gap-${s.lvl}" data-kind="vocab" data-lvl="${s.lvl}" data-show-label="show missing (${gap})" data-hide-label="hide">show missing (${gap})</button>
          <div class="gap-list" id="vocab-gap-${s.lvl}"></div>`
       : `<span class="prof-card-coverage">WK covers all ${s.total}</span>`;
+    const cefr = CEFR_REF[s.lvl];
     return `
       <div class="prof-card">
         <div class="prof-card-top">
           <span class="prof-card-level badge ${jc}">${s.lvl}</span>
+          ${cefr ? `<span class="prof-card-cefr" title="${cefr.title}">${cefr.label}</span>` : ""}
           <span class="prof-card-pct" style="color:${barColor(s.pct)}">${s.pct}%</span>
         </div>
         <div class="prof-card-bar-wrap">
@@ -781,11 +848,12 @@ function buildVocabProficiency(items) {
         <div class="prof-card-stats">
           <span class="prof-card-guru">${s.guruPlus}/${s.total} Guru+</span>
           <span>${s.burned} Burned</span>
+          ${s.wkTeaches ? `<span class="prof-card-pctwk" title="Of the ${s.wkTeaches} reference-list words WK actually teaches (and matches exactly) at ${s.lvl}, ${s.pctOfWk}% are Guru+ or higher — this ignores words WK doesn't teach, unlike the headline %.">${s.pctOfWk}% of WK-taught</span>` : ""}
           <div class="prof-card-detail">${stageDetails || '<span style="color:var(--muted);font-size:10px">No data</span>'}</div>
         </div>
         <div class="prof-card-coverage-row">${coverageNote}</div>
       </div>`;
-  }).join("");
+  }).join("") + renderUntaggedCard("vocab", rawData.items.filter((i) => i.type === "vocabulary" && !i.jlptExact));
 
   const datasets = SRS_ORDER.map((sg) => ({
     label: cap(sg), stack: "s",
