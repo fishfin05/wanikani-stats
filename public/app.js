@@ -150,6 +150,28 @@ function destroyChart(key) {
   if (charts[key]) { charts[key].destroy(); delete charts[key]; }
 }
 
+// Diagonal-hatch canvas pattern so "not taught by WK" bar segments read as
+// "unavailable" rather than just another progress color in the SRS stack.
+const hatchCache = {};
+function makeHatchPattern(color) {
+  if (hatchCache[color]) return hatchCache[color];
+  const c = document.createElement("canvas");
+  c.width = 8; c.height = 8;
+  const ctx = c.getContext("2d");
+  ctx.fillStyle = color;
+  ctx.fillRect(0, 0, 8, 8);
+  ctx.strokeStyle = "#7a80a0";
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(0, 8); ctx.lineTo(8, 0);
+  ctx.moveTo(-2, 2); ctx.lineTo(2, -2);
+  ctx.moveTo(6, 10); ctx.lineTo(10, 6);
+  ctx.stroke();
+  const pattern = ctx.createPattern(c, "repeat");
+  hatchCache[color] = pattern;
+  return pattern;
+}
+
 const BASE_SCALES = {
   x: { ticks: { color: "#7a80a0", font: { size: 11 } }, grid: { color: "#2d3146" } },
   y: { ticks: { color: "#7a80a0", font: { size: 11 } }, grid: { color: "#2d3146" } },
@@ -728,14 +750,24 @@ function buildJlptProficiency(items) {
       </div>`;
   }).join("") + renderUntaggedCard("kanji", rawData.items.filter((i) => i.type === "kanji" && !i.jlpt));
 
-  // Horizontal stacked bar chart
-  const datasets = SRS_ORDER.map((sg) => ({
-    label: cap(sg), stack: "s",
-    data: stats.map((s) => s.byStage[sg] ?? 0),
-    backgroundColor: SRS_COLORS[sg] + "dd",
-    borderColor:     SRS_COLORS[sg],
-    borderWidth: 1,
-  }));
+  // Horizontal stacked bar chart — includes a "Not taught by WK" segment so
+  // the reference-list ceiling is visible in the chart itself, not just in
+  // the "show missing" toggle text.
+  const datasets = [
+    ...SRS_ORDER.map((sg) => ({
+      label: cap(sg), stack: "s",
+      data: stats.map((s) => s.byStage[sg] ?? 0),
+      backgroundColor: SRS_COLORS[sg] + "dd",
+      borderColor:     SRS_COLORS[sg],
+      borderWidth: 1,
+    })),
+    {
+      label: "Not taught by WK", stack: "s",
+      data: stats.map((s) => Math.max(0, s.total - s.wkTeaches)),
+      backgroundColor: makeHatchPattern("#3a3f55"),
+      borderColor: "#5a5f78", borderWidth: 1,
+    },
+  ];
 
   destroyChart("jlptProf");
   charts.jlptProf = new Chart(document.getElementById("jlptProfChart").getContext("2d"), {
@@ -855,13 +887,21 @@ function buildVocabProficiency(items) {
       </div>`;
   }).join("") + renderUntaggedCard("vocab", rawData.items.filter((i) => i.type === "vocabulary" && !i.jlptExact));
 
-  const datasets = SRS_ORDER.map((sg) => ({
-    label: cap(sg), stack: "s",
-    data: stats.map((s) => s.byStage[sg] ?? 0),
-    backgroundColor: SRS_COLORS[sg] + "dd",
-    borderColor:     SRS_COLORS[sg],
-    borderWidth: 1,
-  }));
+  const datasets = [
+    ...SRS_ORDER.map((sg) => ({
+      label: cap(sg), stack: "s",
+      data: stats.map((s) => s.byStage[sg] ?? 0),
+      backgroundColor: SRS_COLORS[sg] + "dd",
+      borderColor:     SRS_COLORS[sg],
+      borderWidth: 1,
+    })),
+    {
+      label: "Not taught by WK", stack: "s",
+      data: stats.map((s) => Math.max(0, s.total - s.wkTeaches)),
+      backgroundColor: makeHatchPattern("#3a3f55"),
+      borderColor: "#5a5f78", borderWidth: 1,
+    },
+  ];
 
   destroyChart("vocabProf");
   charts.vocabProf = new Chart(document.getElementById("vocabProfChart").getContext("2d"), {
