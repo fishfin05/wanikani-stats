@@ -32,7 +32,7 @@ function slimAssignment(a) {
   if (!a.data) return a; // already slimmed
   return { id: a.id, subject_id: a.data.subject_id, srs_stage: a.data.srs_stage,
            passed_at: a.data.passed_at ?? null, burned_at: a.data.burned_at ?? null,
-           unlocked_at: a.data.unlocked_at ?? null };
+           unlocked_at: a.data.unlocked_at ?? null, available_at: a.data.available_at ?? null };
 }
 function slimReviewStat(s) {
   if (!s.data) return s;
@@ -125,7 +125,12 @@ export default async function handler(req, res) {
     existing.reviewStats       = existing.reviewStats.map(slimReviewStat);
     existing.levelProgressions = existing.levelProgressions.map(slimLevelProg);
 
-    const updatedAfter = existing.syncedAt;
+    // A full resync (ignore the stored cursor, re-pull everything) is needed
+    // once whenever a new field gets added to what we slim/store — incremental
+    // sync only re-fetches items that changed recently, so most of an existing
+    // user's queue would never pick up a newly-added field otherwise.
+    const forceFull = req.query?.full === "1" || req.query?.full === "true";
+    const updatedAfter = forceFull ? null : existing.syncedAt;
     const syncedAt = new Date().toISOString();
 
     // Fetch only items changed since last sync, slim before merging
@@ -147,7 +152,8 @@ export default async function handler(req, res) {
     res.status(200).json({
       ok: true,
       syncedAt,
-      incremental: !!existing.syncedAt,
+      incremental: !!existing.syncedAt && !forceFull,
+      full: forceFull,
       updatedAfter,
       assignments: assignments.length,
       reviewStats: reviewStats.length,

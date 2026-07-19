@@ -101,6 +101,7 @@ function buildApiData() {
       passed_at:         asgn.passed_at ?? null,
       burned_at:         asgn.burned_at ?? null,
       unlocked_at:       asgn.unlocked_at ?? null,
+      available_at:      asgn.available_at ?? null,
       meaning_correct:   stats.meaning_correct ?? 0,
       meaning_incorrect: stats.meaning_incorrect ?? 0,
       reading_correct:   stats.reading_correct ?? 0,

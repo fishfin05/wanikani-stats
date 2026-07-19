@@ -47,6 +47,10 @@
         <button id="settings-sync-btn" class="analyze-btn" type="button">Save &amp; Sync Now</button>
       </div>
       <div id="settings-status" class="settings-status"></div>
+      <p class="settings-hint" style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border)">
+        The Reviews Forecast chart needs one full resync to backfill review-due dates for your existing queue (a normal sync only re-fetches items that changed recently).
+      </p>
+      <button id="settings-full-resync-btn" class="settings-btn-secondary" type="button" style="width:100%">Full Resync (one-time, may take longer)</button>
     </div>
   </div>
 
@@ -111,9 +115,18 @@
           <div class="chart-body"><canvas id="guruChart"></canvas></div>
         </div>
         <div class="chart-card">
-          <div class="chart-title">Days per level <span class="legend-inline"><span class="dot" style="background:#28e86e"></span>≤7d <span class="dot" style="background:#e8a228"></span>≤14d <span class="dot" style="background:#e82828"></span>&gt;14d <span class="dot" style="background:#2d3146"></span>current <span class="dot" style="background:#4a90e2"></span>projected milestone <span class="dot" style="background:#4a5190"></span>projected</span></div>
+          <div class="chart-title">Days per level <span class="legend-inline"><span class="dot" style="background:#28e86e"></span>≤7d <span class="dot" style="background:#e8a228"></span>≤14d <span class="dot" style="background:#e82828"></span>&gt;14d <span class="dot" style="background:#2d3146"></span>current</span></div>
           <div class="chart-body"><canvas id="levelDurationChart"></canvas></div>
         </div>
+      </div>
+
+      <div class="chart-card" style="margin-bottom:18px">
+        <div class="chart-title">
+          Reviews Forecast — next 60 days
+          <span class="legend-inline" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0">simulated from your actual SRS queue and WaniKani's fixed review intervals, not a historical average</span>
+        </div>
+        <div id="reviews-forecast-note" class="text-input-hint" style="margin-bottom:8px"></div>
+        <div class="chart-body"><canvas id="reviewsForecastChart"></canvas></div>
       </div>
     </section>
 

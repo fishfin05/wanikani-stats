@@ -286,6 +286,7 @@ function setupSettings() {
   const showBox  = document.getElementById("wk-api-key-show");
   const saveBtn  = document.getElementById("settings-save-btn");
   const syncBtn  = document.getElementById("settings-sync-btn");
+  const fullBtn  = document.getElementById("settings-full-resync-btn");
   const status   = document.getElementById("settings-status");
 
   const stored = localStorage.getItem(WK_API_KEY_STORAGE);
@@ -317,19 +318,18 @@ function setupSettings() {
     setStatus("Saved to this browser.", "ok");
   });
 
-  syncBtn.addEventListener("click", async () => {
+  const doSync = async (triggerBtn, full) => {
     const key = input.value.trim();
     if (!key) { setStatus("Enter an API key first.", "err"); return; }
     localStorage.setItem(WK_API_KEY_STORAGE, key);
 
-    syncBtn.disabled = true;
-    saveBtn.disabled = true;
-    const origText = syncBtn.textContent;
-    syncBtn.textContent = "Syncing…";
-    setStatus("Syncing with WaniKani…", null);
+    [syncBtn, saveBtn, fullBtn].forEach((b) => b.disabled = true);
+    const origText = triggerBtn.textContent;
+    triggerBtn.textContent = full ? "Full resyncing… (this can take a while)" : "Syncing…";
+    setStatus(full ? "Pulling your full WaniKani history — this can take longer than a normal sync…" : "Syncing with WaniKani…", null);
 
     try {
-      const res = await fetch("/api/sync", { method: "POST", headers: { "X-Wk-Api-Key": key } });
+      const res = await fetch(`/api/sync${full ? "?full=1" : ""}`, { method: "POST", headers: { "X-Wk-Api-Key": key } });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(body.error || res.statusText);
       setStatus(
@@ -339,11 +339,13 @@ function setupSettings() {
       setTimeout(() => location.reload(), 1200);
     } catch (e) {
       setStatus("Error: " + e.message, "err");
-      syncBtn.disabled = false;
-      saveBtn.disabled = false;
-      syncBtn.textContent = origText;
+      [syncBtn, saveBtn, fullBtn].forEach((b) => b.disabled = false);
+      triggerBtn.textContent = origText;
     }
-  });
+  };
+
+  syncBtn.addEventListener("click", () => doSync(syncBtn, false));
+  fullBtn.addEventListener("click", () => doSync(fullBtn, true));
 }
 
 // One-click re-sync for when a key is already saved — no need to open the
@@ -409,6 +411,7 @@ function setupReviewsTab() {
   buildGuruChart();
   buildPaceEta(); // also (re)builds the milestones row and the projected level-duration chart
   buildJlptKanjiMilestones();
+  buildReviewsForecast();
 }
 
 // ── PACE / ETA ───────────────────────────────────────────────────────────────
@@ -430,11 +433,65 @@ function median(nums) {
   return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
 }
 
+// ── SRS FORWARD SIMULATION ───────────────────────────────────────────────────
+// WaniKani's per-stage intervals are fixed, not a guess — so for items already
+// in the SRS queue (srs_stage 1-8) with a known available_at, we can actually
+// simulate every future review date instead of estimating from a historical
+// average. Index i = hours spent AT stage (i+1) before its next review, which
+// (if answered correctly) promotes it to stage (i+2). Levels 1-2 get a faster
+// track, but only through the Apprentice stages — Guru+ is unaffected.
+// https://knowledge.wanikani.com/wanikani/srs-stages/
+const SRS_HOURS_STANDARD = [4, 8, 24, 48, 168, 336, 720, 2880];
+const SRS_HOURS_FAST     = [2, 4, 8, 24, 168, 336, 720, 2880];
+
+// Returns every future review event for one item out to `horizonMs`, assuming
+// every review is answered correctly right when it's due (a best case — real
+// usage lags this, especially for busier queues). Each event's `stage` is the
+// SRS stage being tested at that review (before the promotion it causes).
+function simulateFutureReviews(item, horizonMs) {
+  const events = [];
+  let stage = item.srs_stage;
+  if (stage < 1 || stage >= 9 || !item.available_at) return events;
+  const hours = item.level <= 2 ? SRS_HOURS_FAST : SRS_HOURS_STANDARD;
+  const horizonEnd = Date.now() + horizonMs;
+  // An overdue item (available_at already in the past) gets reviewed "now"
+  // for forecasting purposes rather than projected into the past.
+  let cursor = Math.max(new Date(item.available_at).getTime(), Date.now());
+  while (stage < 9 && cursor <= horizonEnd) {
+    events.push({ date: new Date(cursor), stage });
+    cursor += hours[stage - 1] * 3600000;
+    stage += 1;
+  }
+  return events;
+}
+
 function getCurrentLevelInfo() {
   const lps = rawData.levelProgressions ?? [];
   const current = lps.find((lp) => lp.started_at && !lp.passed_at);
   const currentLevel = rawData.currentLevel || current?.level || lps.at(-1)?.level || 1;
   return { lps, current, currentLevel };
+}
+
+// Simulates the actual level-up date for the CURRENT level using WK's real
+// leveling rule (~90% of that level's kanji reach Guru+) and each kanji's
+// real SRS state — not a pace guess. Returns null (falls back to pace) if
+// any needed kanji lacks available_at (pre-Full-Resync data) or isn't
+// unlocked yet, rather than fabricating a number from incomplete data.
+function simulateCurrentLevelUpDate(currentLevel, horizonMs) {
+  const kanji = rawData.items.filter((i) => i.type === "kanji" && i.level === currentLevel);
+  if (!kanji.length) return null;
+  const needCount = Math.ceil(kanji.length * 0.9);
+
+  const guruDates = [];
+  for (const item of kanji) {
+    if (item.srs_stage >= 5) { guruDates.push(item.passed_at ? new Date(item.passed_at) : new Date(0)); continue; }
+    if (item.srs_stage < 1 || !item.available_at) return null;
+    const guruEvent = simulateFutureReviews(item, horizonMs).find((ev) => ev.stage === 4);
+    if (!guruEvent) return null;
+    guruDates.push(guruEvent.date);
+  }
+  guruDates.sort((a, b) => a - b);
+  return guruDates[needCount - 1];
 }
 
 // The auto-computed pace (median days/level, floor-bounded) — set by
@@ -482,9 +539,15 @@ function buildPaceEta() {
   const stats = [];
 
   if (current) {
-    const elapsed = (Date.now() - new Date(current.started_at)) / 86400000;
-    const remaining = Math.max(0, pace - elapsed);
-    stats.push({ val: remaining < 1 ? "<1" : `~${Math.round(remaining)}`, label: `days to Lv ${currentLevel + 1}${adjusted ? " (adjusted)" : ""}` });
+    const simulatedGuruDate = simulateCurrentLevelUpDate(currentLevel, 180 * 86400000);
+    if (simulatedGuruDate && !adjusted) {
+      const remaining = Math.max(0, (simulatedGuruDate - Date.now()) / 86400000);
+      stats.push({ val: remaining < 1 ? "<1" : `~${Math.round(remaining)}`, label: `days to Lv ${currentLevel + 1} (simulated from your queue)` });
+    } else {
+      const elapsed = (Date.now() - new Date(current.started_at)) / 86400000;
+      const remaining = Math.max(0, pace - elapsed);
+      stats.push({ val: remaining < 1 ? "<1" : `~${Math.round(remaining)}`, label: `days to Lv ${currentLevel + 1}${adjusted ? " (adjusted)" : " (est. from pace)"}` });
+    }
   }
 
   stats.push({ val: med !== null ? med.toFixed(1) : "—", label: med !== null ? `median days/level (last ${recent.length})` : "median days/level" });
@@ -631,35 +694,18 @@ function buildLevelDurationChart() {
     return Math.round((end - new Date(lp.started_at)) / 86400000 * 10) / 10;
   });
 
-  // Projected bars for levels not reached yet, out to 60, using the same
-  // (optionally overridden) pace driving the ETA banner and milestones —
-  // gives a visual "runway" instead of just history stopping at today.
-  const pace = getEffectivePace();
-  const lastKnownLevel = lps.at(-1)?.level ?? 0;
-  const projectedLevels = [];
-  if (pace) for (let lv = lastKnownLevel + 1; lv <= 60; lv++) projectedLevels.push(lv);
-
-  const labels = [...lps.map((lp) => `Lv ${lp.level}`), ...projectedLevels.map((lv) => `Lv ${lv}`)];
-  const data   = [...durFixed, ...projectedLevels.map(() => pace)];
-  const bg = [
-    ...durFixed.map((d, i) => !lps[i].passed_at ? "#2d3146" : d <= 7 ? "#28e86e88" : d <= 14 ? "#e8a22888" : "#e8282888"),
-    ...projectedLevels.map((lv) => MILESTONE_LEVELS.includes(lv) ? "#4a90e288" : "#4a519055"),
-  ];
-  const border = [
-    ...durFixed.map((d, i) => !lps[i].passed_at ? "#4a5180" : d <= 7 ? "#28e86e" : d <= 14 ? "#e8a228" : "#e82828"),
-    ...projectedLevels.map((lv) => MILESTONE_LEVELS.includes(lv) ? "#4a90e2" : "#4a5190"),
-  ];
-
   destroyChart("levelDuration");
   charts.levelDuration = new Chart(document.getElementById("levelDurationChart").getContext("2d"), {
     type: "bar",
     data: {
-      labels,
+      labels: lps.map((lp) => `Lv ${lp.level}`),
       datasets: [{
         label: "Days",
-        data,
-        backgroundColor: bg,
-        borderColor: border,
+        data: durFixed,
+        backgroundColor: durFixed.map((d, i) =>
+          !lps[i].passed_at ? "#2d3146" : d <= 7 ? "#28e86e88" : d <= 14 ? "#e8a22888" : "#e8282888"),
+        borderColor: durFixed.map((d, i) =>
+          !lps[i].passed_at ? "#4a5180" : d <= 7 ? "#28e86e" : d <= 14 ? "#e8a228" : "#e82828"),
         borderWidth: 1,
       }],
     },
@@ -667,24 +713,88 @@ function buildLevelDurationChart() {
       responsive: true, maintainAspectRatio: false,
       plugins: {
         legend: { display: false },
-        tooltip: {
-          callbacks: {
-            label: (ctx) => {
-              const idx = ctx.dataIndex;
-              if (idx < lps.length) return `${ctx.raw ?? "—"} days${!lps[idx].passed_at ? " (in progress)" : ""}`;
-              const lv = projectedLevels[idx - lps.length];
-              return `~${ctx.raw} days (projected${MILESTONE_LEVELS.includes(lv) ? " — milestone" : ""})`;
-            },
-          },
-        },
+        tooltip: { callbacks: { label: (ctx) => `${ctx.raw ?? "—"} days${!lps[ctx.dataIndex].passed_at ? " (in progress)" : ""}` } },
       },
       scales: {
-        x: { ...BASE_SCALES.x, ticks: { ...BASE_SCALES.x.ticks, maxRotation: 90, autoSkip: true, maxTicksLimit: 30 } },
+        x: { ...BASE_SCALES.x },
         y: { ...BASE_SCALES.y, title: { display: true, text: "Days", color: "#7a80a0" } },
       },
     },
   });
 }
+
+// ── REVIEWS FORECAST ─────────────────────────────────────────────────────────
+// Real day-by-day review counts, simulated forward from each item's actual
+// SRS state (see simulateFutureReviews above) — not a flat historical
+// average repeated across a fake timeline. Needs available_at, which only
+// backfills for the whole queue after a Full Resync (Settings modal) —
+// a normal sync only re-fetches items that changed recently, so most
+// already-synced items won't have it until that runs once.
+function buildReviewsForecast(horizonDays = 60) {
+  const note = document.getElementById("reviews-forecast-note");
+  const canvas = document.getElementById("reviewsForecastChart");
+  if (!canvas) return;
+
+  const inQueue = rawData.items.filter((i) => i.srs_stage >= 1 && i.srs_stage <= 8);
+  const withDate = inQueue.filter((i) => i.available_at);
+  const coverage = inQueue.length ? Math.round(withDate.length / inQueue.length * 100) : 100;
+
+  if (note) {
+    note.innerHTML = (coverage < 90 && inQueue.length > 0)
+      ? `<span style="color:#e8a228">Only ${coverage}% of your active queue (${withDate.length}/${inQueue.length} items) has review-due data, so this forecast is incomplete — run a <button class="gap-toggle" type="button" id="forecast-resync-link" style="font-size:11px">Full Resync</button> in Settings (⚙ API Key) for the complete picture.</span>`
+      : "";
+  }
+
+  const horizonMs = horizonDays * 86400000;
+  const perDay = {}; // "YYYY-MM-DD" -> { apprentice, guru, master, enlightened }
+  for (const item of withDate) {
+    for (const ev of simulateFutureReviews(item, horizonMs)) {
+      const key = ev.date.toISOString().slice(0, 10);
+      const sg = srsGroup(ev.stage);
+      (perDay[key] ??= {})[sg] = (perDay[key][sg] ?? 0) + 1;
+    }
+  }
+
+  const days = [];
+  for (let i = 0; i < horizonDays; i++) days.push(new Date(Date.now() + i * 86400000).toISOString().slice(0, 10));
+
+  const FORECAST_GROUPS = ["apprentice", "guru", "master", "enlightened"];
+  const datasets = FORECAST_GROUPS.map((sg) => ({
+    label: cap(sg), stack: "s",
+    data: days.map((d) => perDay[d]?.[sg] ?? 0),
+    backgroundColor: SRS_COLORS[sg] + "dd",
+    borderColor: SRS_COLORS[sg],
+    borderWidth: 1,
+  }));
+
+  destroyChart("reviewsForecast");
+  charts.reviewsForecast = new Chart(canvas.getContext("2d"), {
+    type: "bar",
+    data: {
+      labels: days.map((d) => new Date(d).toLocaleDateString(undefined, { month: "short", day: "numeric" })),
+      datasets,
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      interaction: { mode: "index" },
+      plugins: {
+        legend: BASE_LEGEND,
+        tooltip: {
+          mode: "index",
+          callbacks: { footer: (items) => `Total: ${items.reduce((s, i) => s + i.raw, 0)}` },
+        },
+      },
+      scales: {
+        x: { ...BASE_SCALES.x, stacked: true, ticks: { ...BASE_SCALES.x.ticks, maxRotation: 90, autoSkip: true, maxTicksLimit: 20 } },
+        y: { ...BASE_SCALES.y, stacked: true, title: { display: true, text: "Reviews due", color: "#7a80a0" } },
+      },
+    },
+  });
+}
+
+document.addEventListener("click", (e) => {
+  if (e.target.id === "forecast-resync-link") document.getElementById("settings-btn")?.click();
+});
 
 // ── ANALYTICS TAB ────────────────────────────────────────────────────────────
 function setupAnalyticsTab() {
