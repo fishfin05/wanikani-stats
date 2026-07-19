@@ -238,8 +238,21 @@ function getFiltered(tabKey) {
 }
 
 // ── init ─────────────────────────────────────────────────────────────────────
+// The sticky table-header offset (--header-h) has to match the site header's
+// *real* rendered height, not a guess — the header's content changes after
+// data loads (level badge, sync timestamp get appended below), which can
+// change its height on some viewport widths. Re-measure whenever that's
+// possible rather than trusting a hardcoded px value.
+function syncHeaderHeight() {
+  const header = document.querySelector("header");
+  if (header) document.documentElement.style.setProperty("--header-h", `${header.offsetHeight}px`);
+}
+window.addEventListener("resize", syncHeaderHeight);
+if (document.fonts?.ready) document.fonts.ready.then(syncHeaderHeight).catch(() => {});
+
 async function init() {
   showLoading("Loading data…");
+  syncHeaderHeight();
   try {
     const res = await fetch("/api/data");
     if (!res.ok) throw new Error(await res.text());
@@ -264,6 +277,8 @@ async function init() {
     syncEl.textContent = `Updated ${d.toLocaleDateString(undefined, { month: "short", day: "numeric" })}`;
     document.querySelector(".header-inner").appendChild(syncEl);
   }
+
+  syncHeaderHeight(); // re-measure now that the badge/timestamp above may have changed it
 
   setupTabs();
   setupSettings();
@@ -1375,6 +1390,15 @@ function setupTextTab() {
   const textarea = document.getElementById("text-input");
   const tooltip  = document.getElementById("text-tooltip");
   const annotated = document.getElementById("text-annotated");
+  const charCount = document.getElementById("text-input-charcount");
+
+  // Independent sanity check: proves whether a full paste actually landed in
+  // the box, decoupled from anything that happens after Analyze is clicked.
+  const updateCharCount = () => {
+    const n = [...textarea.value].length;
+    charCount.textContent = n ? `· ${n.toLocaleString()} characters in box` : "";
+  };
+  textarea.addEventListener("input", updateCharCount);
 
   btn.addEventListener("click", () => {
     const text = textarea.value;
@@ -1535,6 +1559,13 @@ async function runTextAnalysis(text) {
     renderTextBreakdown(tokens);
     renderTextItemList(tokens);
     document.getElementById("text-results").scrollIntoView({ behavior: "smooth", block: "start" });
+  } catch (e) {
+    // Previously any error here (bad JSON, a render-loop exception on an
+    // unexpected token shape, etc.) failed silently — the button would just
+    // reset with nothing rendered, which reads as "only some of it showed
+    // up" if a partial render happened before the throw. Surface it instead.
+    console.error("Text analysis failed:", e);
+    alert("Something went wrong analyzing that text: " + e.message + "\n\nIf this keeps happening, try a shorter excerpt and let me know what's in it (e.g. embedded furigana, unusual punctuation).");
   } finally {
     btn.disabled = false;
     btn.textContent = "Analyze";

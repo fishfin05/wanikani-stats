@@ -131,10 +131,14 @@ const server = createServer((req, res) => {
       res.end(JSON.stringify({ error: "Tokenizer still loading — please retry in a moment" }));
       return;
     }
-    let body = "";
-    req.on("data", (chunk) => { body += chunk; });
+    const chunks = [];
+    req.on("data", (chunk) => { chunks.push(chunk); });
     req.on("end", () => {
       try {
+        // Decode once from the concatenated raw bytes — decoding each chunk
+        // separately (e.g. `body += chunk`) corrupts any multi-byte UTF-8
+        // character that happens to straddle a chunk boundary in longer text.
+        const body = Buffer.concat(chunks).toString("utf8");
         const { text } = JSON.parse(body);
         if (!text || typeof text !== "string") throw new Error("text field required");
         const raw = tokenizer.tokenize(text);
