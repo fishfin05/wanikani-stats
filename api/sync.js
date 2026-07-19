@@ -63,12 +63,18 @@ function loadBundled(name) {
 }
 
 export default async function handler(req, res) {
-  const secret = process.env.CRON_SECRET;
-  if (secret && req.headers.authorization !== `Bearer ${secret}`) {
-    return res.status(401).json({ error: "Unauthorized" });
+  // A client-supplied WaniKani key (pasted into the site's settings panel) is
+  // its own proof of authorization for a manual sync, so it bypasses the cron
+  // secret check used for the scheduled/automated sync.
+  const clientKey = req.headers["x-wk-api-key"];
+  if (!clientKey) {
+    const secret = process.env.CRON_SECRET;
+    if (secret && req.headers.authorization !== `Bearer ${secret}`) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
   }
 
-  const apiKey = process.env.WANIKANI_API_KEY;
+  const apiKey = clientKey || process.env.WANIKANI_API_KEY;
   if (!apiKey) {
     return res.status(500).json({ error: "WANIKANI_API_KEY not configured" });
   }

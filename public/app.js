@@ -244,11 +244,83 @@ async function init() {
   }
 
   setupTabs();
+  setupSettings();
   setupReviewsTab();
   setupAnalyticsTab();
   setupItemsTab();
   setupTextTab();
   hideLoading();
+}
+
+// ── SETTINGS (API key) ──────────────────────────────────────────────────────
+const WK_API_KEY_STORAGE = "wk_api_key";
+
+function setupSettings() {
+  const btn      = document.getElementById("settings-btn");
+  const modal    = document.getElementById("settings-modal");
+  const closeBtn = document.getElementById("settings-close-btn");
+  const input    = document.getElementById("wk-api-key-input");
+  const showBox  = document.getElementById("wk-api-key-show");
+  const saveBtn  = document.getElementById("settings-save-btn");
+  const syncBtn  = document.getElementById("settings-sync-btn");
+  const status   = document.getElementById("settings-status");
+
+  const stored = localStorage.getItem(WK_API_KEY_STORAGE);
+  if (stored) input.value = stored;
+
+  const setStatus = (msg, kind) => {
+    status.textContent = msg;
+    status.className = "settings-status" + (kind ? ` ${kind}` : "");
+  };
+
+  const open = () => { modal.classList.remove("hidden"); setStatus("", null); };
+  const close = () => modal.classList.add("hidden");
+
+  btn.addEventListener("click", open);
+  closeBtn.addEventListener("click", close);
+  modal.addEventListener("click", (e) => { if (e.target === modal) close(); });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !modal.classList.contains("hidden")) close();
+  });
+
+  showBox.addEventListener("change", () => {
+    input.type = showBox.checked ? "text" : "password";
+  });
+
+  saveBtn.addEventListener("click", () => {
+    const key = input.value.trim();
+    if (!key) { setStatus("Enter an API key first.", "err"); return; }
+    localStorage.setItem(WK_API_KEY_STORAGE, key);
+    setStatus("Saved to this browser.", "ok");
+  });
+
+  syncBtn.addEventListener("click", async () => {
+    const key = input.value.trim();
+    if (!key) { setStatus("Enter an API key first.", "err"); return; }
+    localStorage.setItem(WK_API_KEY_STORAGE, key);
+
+    syncBtn.disabled = true;
+    saveBtn.disabled = true;
+    const origText = syncBtn.textContent;
+    syncBtn.textContent = "Syncing…";
+    setStatus("Syncing with WaniKani…", null);
+
+    try {
+      const res = await fetch("/api/sync", { method: "POST", headers: { "X-Wk-Api-Key": key } });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || res.statusText);
+      setStatus(
+        `Synced! ${body.assignments} assignments, ${body.reviewStats} review stats, ${body.levelProgressions} level progressions (${body.elapsed}). Reloading…`,
+        "ok"
+      );
+      setTimeout(() => location.reload(), 1200);
+    } catch (e) {
+      setStatus("Error: " + e.message, "err");
+      syncBtn.disabled = false;
+      saveBtn.disabled = false;
+      syncBtn.textContent = origText;
+    }
+  });
 }
 
 function setupTabs() {
