@@ -74,7 +74,11 @@ export default async function handler(req, res) {
     }
   }
 
-  const apiKey = clientKey || process.env.WANIKANI_API_KEY;
+  // Strip a leading BOM (U+FEFF) and surrounding whitespace — env vars pasted
+  // from a BOM-prefixed file break the Authorization header otherwise ("Cannot
+  // convert argument to a ByteString" from the fetch header serializer).
+  const sanitizeKey = (k) => k?.replace(/^﻿/, "").trim() || null;
+  const apiKey = sanitizeKey(clientKey) || sanitizeKey(process.env.WANIKANI_API_KEY);
   if (!apiKey) {
     return res.status(500).json({ error: "WANIKANI_API_KEY not configured" });
   }
