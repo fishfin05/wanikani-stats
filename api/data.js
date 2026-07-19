@@ -1,4 +1,4 @@
-import { list } from "@vercel/blob";
+import { list, get } from "@vercel/blob";
 import { readFileSync, existsSync } from "fs";
 import { join } from "path";
 
@@ -10,13 +10,15 @@ function loadJson(name) {
 }
 
 async function loadDynamic() {
-  // Try Vercel Blob first (kept fresh by daily cron)
+  // Try Vercel Blob first (kept fresh by daily cron). The store is private,
+  // so blobs must be read with get() (authenticated) rather than a plain
+  // fetch() of the blob URL.
   try {
     const { blobs } = await list({ prefix: "wk-dynamic" });
     if (blobs.length > 0) {
-      const r = await fetch(blobs[0].url);
-      if (r.ok) {
-        const blob = await r.json();
+      const result = await get(blobs[0].pathname, { access: "private" });
+      if (result?.statusCode === 200 && result.stream) {
+        const blob = await new Response(result.stream).json();
         return {
           assignments: blob.assignments ?? [],
           reviewStats: blob.reviewStats ?? [],

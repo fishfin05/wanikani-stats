@@ -1,4 +1,4 @@
-import { put, list } from "@vercel/blob";
+import { put, list, get } from "@vercel/blob";
 import { readFileSync, existsSync } from "fs";
 import { join } from "path";
 
@@ -88,13 +88,17 @@ export default async function handler(req, res) {
   const started = Date.now();
 
   try {
-    // Try to load existing blob data for incremental sync
+    // Try to load existing blob data for incremental sync. The store is
+    // private, so blobs must be read with get() (authenticated) rather than
+    // a plain fetch() of the blob URL.
     let existing = null;
     try {
       const { blobs } = await list({ prefix: "wk-dynamic" });
       if (blobs.length > 0) {
-        const r = await fetch(blobs[0].url);
-        if (r.ok) existing = await r.json();
+        const result = await get(blobs[0].pathname, { access: "private" });
+        if (result?.statusCode === 200 && result.stream) {
+          existing = await new Response(result.stream).json();
+        }
       }
     } catch (e) {
       console.warn("Could not load existing blob:", e.message);
@@ -130,7 +134,7 @@ export default async function handler(req, res) {
     const levelProgressions = mergeById(existing.levelProgressions, newLevelProgressions);
 
     await put("wk-dynamic.json", JSON.stringify({ syncedAt, assignments, reviewStats, levelProgressions }), {
-      access: "public",
+      access: "private",
       addRandomSuffix: false,
     });
 
