@@ -272,7 +272,11 @@ tr:hover td { background: rgba(255,255,255,.02); }
   transition: border-color .15s;
 }
 .settings-btn:hover { border-color: var(--accent); }
+.settings-btn:disabled { opacity: .6; cursor: default; }
 .settings-icon { font-size: 13px; }
+.sync-now-status { font-size: 11px; flex-shrink: 0; }
+.sync-now-status.ok  { color: #28e86e; }
+.sync-now-status.err { color: #e82828; }
 
 .settings-panel {
   background: var(--surface); border: 1px solid var(--border); border-radius: 12px;

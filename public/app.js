@@ -245,6 +245,7 @@ async function init() {
 
   setupTabs();
   setupSettings();
+  setupSyncNowButton();
   setupReviewsTab();
   setupAnalyticsTab();
   setupItemsTab();
@@ -319,6 +320,39 @@ function setupSettings() {
       syncBtn.disabled = false;
       saveBtn.disabled = false;
       syncBtn.textContent = origText;
+    }
+  });
+}
+
+// One-click re-sync for when a key is already saved — no need to open the
+// settings modal just to sync again.
+function setupSyncNowButton() {
+  const btn    = document.getElementById("sync-now-btn");
+  const status = document.getElementById("sync-now-status");
+  if (!btn) return;
+
+  btn.addEventListener("click", async () => {
+    const key = localStorage.getItem(WK_API_KEY_STORAGE);
+    if (!key) { document.getElementById("settings-btn").click(); return; }
+
+    btn.disabled = true;
+    const origText = btn.innerHTML;
+    btn.innerHTML = `<span class="settings-icon">↻</span> Syncing…`;
+    status.textContent = "";
+    status.className = "sync-now-status";
+
+    try {
+      const res = await fetch("/api/sync", { method: "POST", headers: { "X-Wk-Api-Key": key } });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || res.statusText);
+      status.textContent = "Synced! Reloading…";
+      status.className = "sync-now-status ok";
+      setTimeout(() => location.reload(), 900);
+    } catch (e) {
+      status.textContent = "Error: " + e.message;
+      status.className = "sync-now-status err";
+      btn.disabled = false;
+      btn.innerHTML = origText;
     }
   });
 }
