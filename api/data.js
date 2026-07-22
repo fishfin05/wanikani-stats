@@ -44,12 +44,62 @@ async function loadDynamic() {
   };
 }
 
+// WaniKani's own /v2/reviews endpoint has returned an empty dataset for
+// everyone since a 2023 database-performance incident (permanent, not
+// account-specific — see WK's "API changes - Get All Reviews" community
+// post), so per-review timestamps aren't available from the API at all.
+// unlocked_at/passed_at/burned_at on assignments are the closest available
+// proxy for "activity per day": each is a real event that only happens as a
+// result of a review, just coarser than every individual review submission.
+function buildActivitySummary(assignments) {
+  const dailyCounts = {};
+  for (const a of assignments) {
+    for (const ts of [a.unlocked_at, a.passed_at, a.burned_at]) {
+      if (!ts) continue;
+      const date = ts.slice(0, 10); // YYYY-MM-DD, UTC
+      dailyCounts[date] = (dailyCounts[date] ?? 0) + 1;
+    }
+  }
+
+  const days = Object.keys(dailyCounts).sort();
+  let longestStreak = 0, run = 0, prevDate = null;
+  for (const date of days) {
+    if (prevDate) {
+      const gapDays = Math.round((Date.parse(date) - Date.parse(prevDate)) / 86400000);
+      run = gapDays === 1 ? run + 1 : 1;
+    } else {
+      run = 1;
+    }
+    longestStreak = Math.max(longestStreak, run);
+    prevDate = date;
+  }
+
+  // Current streak: walk backward from today (UTC) while consecutive days
+  // have at least one review; a gap of exactly "today with no reviews yet"
+  // doesn't break it, since the streak can still be extended before midnight.
+  let currentStreak = 0;
+  const todayUTC = new Date().toISOString().slice(0, 10);
+  let cursor = dailyCounts[todayUTC] ? todayUTC : new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+  while (dailyCounts[cursor]) {
+    currentStreak++;
+    cursor = new Date(Date.parse(cursor) - 86400000).toISOString().slice(0, 10);
+  }
+
+  return { dailyCounts, currentStreak, longestStreak };
+}
+
 async function buildApiData() {
   const subjects   = loadJson("subjects");
   const jlpt       = JSON.parse(readFileSync(join(DATA, "jlpt.json"), "utf8"));
   const jlptVocab  = JSON.parse(readFileSync(join(DATA, "jlpt_vocab.json"), "utf8"));
   const dynamic    = await loadDynamic();
   const { assignments, reviewStats, levelProgressions, syncedAt, fromBlob } = dynamic;
+  // review_statistics accumulates every meaning/reading answer ever given per
+  // item, so summing it is a true all-time review count — unlike per-review
+  // timestamps, this aggregate survived the 2023 API restriction.
+  const totalReviews = reviewStats.reduce((sum, s) =>
+    sum + s.meaning_correct + s.meaning_incorrect + s.reading_correct + s.reading_incorrect, 0);
+  const activity   = { ...buildActivitySummary(assignments), totalReviews };
 
   const assignmentBySubject = {};
   for (const a of assignments) assignmentBySubject[a.subject_id] = a;
@@ -131,7 +181,7 @@ async function buildApiData() {
     passed_at:   lp.passed_at,
   }));
 
-  return { items, levelProgressions: levelProgs, subjectLevel, jlptTotals, vocabTotals, jlptGapKanji, jlptGapVocab, currentLevel, syncedAt, fromBlob };
+  return { items, levelProgressions: levelProgs, subjectLevel, jlptTotals, vocabTotals, jlptGapKanji, jlptGapVocab, currentLevel, syncedAt, fromBlob, activity };
 }
 
 export default async function handler(req, res) {

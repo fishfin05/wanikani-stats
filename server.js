@@ -33,6 +33,44 @@ function loadJson(name) {
   return existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : [];
 }
 
+// WaniKani's /v2/reviews endpoint has returned empty for everyone since a
+// 2023 database-performance incident, so per-review timestamps aren't
+// available — unlocked_at/passed_at/burned_at on assignments are the closest
+// available proxy for "activity per day". See api/data.js for the deployed twin.
+function buildActivitySummary(assignments) {
+  const dailyCounts = {};
+  for (const a of assignments) {
+    for (const ts of [a.unlocked_at, a.passed_at, a.burned_at]) {
+      if (!ts) continue;
+      const date = ts.slice(0, 10);
+      dailyCounts[date] = (dailyCounts[date] ?? 0) + 1;
+    }
+  }
+
+  const days = Object.keys(dailyCounts).sort();
+  let longestStreak = 0, run = 0, prevDate = null;
+  for (const date of days) {
+    if (prevDate) {
+      const gapDays = Math.round((Date.parse(date) - Date.parse(prevDate)) / 86400000);
+      run = gapDays === 1 ? run + 1 : 1;
+    } else {
+      run = 1;
+    }
+    longestStreak = Math.max(longestStreak, run);
+    prevDate = date;
+  }
+
+  let currentStreak = 0;
+  const todayUTC = new Date().toISOString().slice(0, 10);
+  let cursor = dailyCounts[todayUTC] ? todayUTC : new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+  while (dailyCounts[cursor]) {
+    currentStreak++;
+    cursor = new Date(Date.parse(cursor) - 86400000).toISOString().slice(0, 10);
+  }
+
+  return { dailyCounts, currentStreak, longestStreak };
+}
+
 function buildApiData() {
   const subjects          = loadJson("subjects");
   const assignments       = loadJson("assignments");
@@ -40,6 +78,9 @@ function buildApiData() {
   const levelProgressions = loadJson("level_progressions");
   const jlpt              = JSON.parse(readFileSync(resolve(__dirname, "data/jlpt.json"), "utf8"));
   const jlptVocab          = JSON.parse(readFileSync(resolve(__dirname, "data/jlpt_vocab.json"), "utf8"));
+  const totalReviews = reviewStats.reduce((sum, s) =>
+    sum + s.meaning_correct + s.meaning_incorrect + s.reading_correct + s.reading_incorrect, 0);
+  const activity = { ...buildActivitySummary(assignments), totalReviews };
 
   const assignmentBySubject = {};
   for (const a of assignments) assignmentBySubject[a.subject_id] = a;
@@ -119,7 +160,7 @@ function buildApiData() {
 
   const metaPath = `${DATA}/meta.json`;
   const meta = existsSync(metaPath) ? JSON.parse(readFileSync(metaPath, "utf8")) : {};
-  return { items, levelProgressions: levelProgs, subjectLevel, jlptTotals, vocabTotals, jlptGapKanji, jlptGapVocab, currentLevel, syncedAt: meta.syncedAt ?? null, fromBlob: false };
+  return { items, levelProgressions: levelProgs, subjectLevel, jlptTotals, vocabTotals, jlptGapKanji, jlptGapVocab, currentLevel, syncedAt: meta.syncedAt ?? null, fromBlob: false, activity };
 }
 
 const server = createServer((req, res) => {

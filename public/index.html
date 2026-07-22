@@ -15,6 +15,7 @@
         <button class="tab active" data-tab="reviews">Reviews</button>
         <button class="tab" data-tab="analytics">Analytics</button>
         <button class="tab" data-tab="items">Items</button>
+        <button class="tab" data-tab="insights">Insights</button>
         <button class="tab" data-tab="text">Text</button>
       </nav>
       <button id="sync-now-btn" class="settings-btn" type="button" title="Sync WaniKani data now">
@@ -252,6 +253,46 @@
         </table>
       </div>
       <div class="pagination" id="pagination"></div>
+    </section>
+
+    <!-- ══ INSIGHTS TAB ══ -->
+    <section id="insights-tab" class="tab-content">
+      <div class="overall-stats-row" id="streakStatsRow"></div>
+
+      <div class="chart-card" style="margin-bottom:18px">
+        <div class="chart-title">
+          Study Activity
+          <span class="legend-inline" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0" title="WaniKani's API has returned zero data from its /reviews endpoint for every user since a 2023 database-performance incident, so per-review timestamps don't exist anywhere to pull from — this counts item unlock/pass/burn events per day instead, the closest real proxy available.">days you unlocked, passed, or burned at least one item (UTC) — a proxy for review activity, not a literal review count (?)</span>
+        </div>
+        <div id="heatmap-wrap" class="heatmap-wrap"></div>
+      </div>
+
+      <div class="chart-card">
+        <div class="chart-title">
+          Leeches
+          <span class="legend-inline" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0">items you keep getting wrong — sorted worst-accuracy first, minimum 4 answers so brand-new items don't show up on one bad guess</span>
+          <label class="ctrl-label" style="margin-left:auto">
+            <input type="checkbox" id="leech-critical-only"> Critical only (Guru+ but still &lt;75%)
+          </label>
+        </div>
+        <div class="table-wrap">
+          <table id="leechTable">
+            <thead>
+              <tr>
+                <th>Character</th>
+                <th>Type</th>
+                <th>WK Lvl</th>
+                <th>SRS Stage</th>
+                <th>Meanings</th>
+                <th>Accuracy</th>
+                <th>Wrong / Total</th>
+              </tr>
+            </thead>
+            <tbody id="leechBody"></tbody>
+          </table>
+        </div>
+        <p class="text-input-hint" id="leech-empty-hint" style="margin-top:10px;display:none">No leeches right now — nice.</p>
+      </div>
     </section>
 
   </main>

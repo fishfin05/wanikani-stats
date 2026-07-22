@@ -1,5 +1,5 @@
 // ── global state ────────────────────────────────────────────────────────────
-let rawData = { items: [], levelProgressions: [], jlptTotals: {}, currentLevel: 0 };
+let rawData = { items: [], levelProgressions: [], jlptTotals: {}, currentLevel: 0, activity: { dailyCounts: {}, currentStreak: 0, longestStreak: 0, totalReviews: 0 } };
 const charts = {};
 let itemsPage = 1, sortCol = "level", sortDir = "asc";
 const PAGE_SIZE = 100;
@@ -271,6 +271,7 @@ async function init() {
   setupReviewsTab();
   setupAnalyticsTab();
   setupItemsTab();
+  setupInsightsTab();
   setupTextTab();
   hideLoading();
 }
@@ -1546,6 +1547,135 @@ function renderPagination(total) {
       document.querySelector(".table-wrap")?.scrollIntoView({ behavior: "smooth" });
     });
   });
+}
+
+// ── INSIGHTS TAB ─────────────────────────────────────────────────────────────
+// The two features the WaniKani community reaches for third-party
+// userscripts/apps to get: an activity heatmap + streak (no equivalent on
+// wanikani.com itself — built from unlock/pass/burn events since WK's API
+// has returned empty from /reviews for everyone since 2023, so per-review
+// timestamps aren't available from any endpoint), and a leech/critical-items
+// list (WK's own dashboard only ever shows "critical condition", never the
+// full leech list, and only while an item is still unlocked — this reads
+// straight off review_statistics so it works for burned items too).
+function setupInsightsTab() {
+  buildStreakStats();
+  buildActivityHeatmap();
+
+  const criticalOnly = document.getElementById("leech-critical-only");
+  criticalOnly.addEventListener("change", () => buildLeechTable(criticalOnly.checked));
+  buildLeechTable(false);
+}
+
+function firstUnlockedLabel() {
+  const dates = rawData.levelProgressions.map((lp) => lp.unlocked_at).filter(Boolean).sort();
+  return dates.length ? new Date(dates[0]).toLocaleDateString(undefined, { month: "short", year: "numeric" }) : "you started";
+}
+
+function buildStreakStats() {
+  const a = rawData.activity ?? { currentStreak: 0, longestStreak: 0, totalReviews: 0 };
+  document.getElementById("streakStatsRow").innerHTML = `
+    <div class="overall-stat">
+      <span class="overall-stat-label">Current streak</span>
+      <span class="overall-stat-val">${a.currentStreak}${a.currentStreak === 1 ? " day" : " days"}</span>
+      <span class="overall-stat-sub">${a.currentStreak > 0 ? "keep it going" : "no unlock/pass/burn yet today"}</span>
+    </div>
+    <div class="overall-stat">
+      <span class="overall-stat-label">Longest streak</span>
+      <span class="overall-stat-val">${a.longestStreak}${a.longestStreak === 1 ? " day" : " days"}</span>
+      <span class="overall-stat-sub">personal best</span>
+    </div>
+    <div class="overall-stat">
+      <span class="overall-stat-label">Total reviews <span class="overall-stat-hint" title="Summed from review_statistics (every meaning/reading answer, correct or not, ever recorded per item) — this total survived the 2023 API restriction even though per-review timestamps didn't.">(?)</span></span>
+      <span class="overall-stat-val">${a.totalReviews.toLocaleString()}</span>
+      <span class="overall-stat-sub">since ${firstUnlockedLabel()}</span>
+    </div>
+  `;
+}
+
+// GitHub-style contribution grid: one column per week, Sun-Sat rows, ~53
+// weeks back from today. Built as plain divs (not Chart.js — a grid of
+// fixed-size cells with per-cell tooltips is simpler without a charting lib).
+function buildActivityHeatmap() {
+  const counts = rawData.activity?.dailyCounts ?? {};
+  const wrap = document.getElementById("heatmap-wrap");
+
+  const today = new Date();
+  const todayUTC = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate());
+  const WEEKS = 53;
+  const start = todayUTC - (WEEKS * 7 - 1) * 86400000;
+  // Align the grid so today's column lines up and each column is a Sun-Sat week.
+  const startDow = new Date(start).getUTCDay();
+  const gridStart = start - startDow * 86400000;
+
+  const max = Math.max(1, ...Object.values(counts));
+  const level = (n) => n === 0 ? 0 : n < max * 0.25 ? 1 : n < max * 0.5 ? 2 : n < max * 0.75 ? 3 : 4;
+
+  const months = [];
+  let lastMonth = -1;
+  const cols = [];
+  for (let w = 0; w < WEEKS + 1; w++) {
+    const cells = [];
+    for (let d = 0; d < 7; d++) {
+      const t = gridStart + (w * 7 + d) * 86400000;
+      const date = new Date(t);
+      const dateStr = date.toISOString().slice(0, 10);
+      if (t > todayUTC) { cells.push(`<div class="heatmap-cell heatmap-cell--empty"></div>`); continue; }
+      if (d === 0 && date.getUTCMonth() !== lastMonth) {
+        lastMonth = date.getUTCMonth();
+        months.push({ col: w, label: date.toLocaleDateString(undefined, { month: "short", timeZone: "UTC" }) });
+      }
+      const n = counts[dateStr] ?? 0;
+      cells.push(`<div class="heatmap-cell" data-level="${level(n)}" title="${dateStr}: ${n} unlock/pass/burn event${n === 1 ? "" : "s"}"></div>`);
+    }
+    cols.push(`<div class="heatmap-col">${cells.join("")}</div>`);
+  }
+
+  const monthsRow = months.map((m) => `<span class="heatmap-month" style="grid-column:${m.col + 1}">${m.label}</span>`).join("");
+
+  wrap.innerHTML = `
+    <div class="heatmap-months" style="grid-template-columns:repeat(${WEEKS + 1},12px)">${monthsRow}</div>
+    <div class="heatmap-grid">${cols.join("")}</div>
+    <div class="heatmap-legend">
+      <span>Less</span>
+      ${[0,1,2,3,4].map((l) => `<div class="heatmap-cell" data-level="${l}"></div>`).join("")}
+      <span>More</span>
+    </div>
+  `;
+}
+
+function buildLeechTable(criticalOnly) {
+  const MIN_ANSWERS = 4;
+  const LEECH_THRESHOLD = 75;
+  const leeches = rawData.items
+    .filter((i) => {
+      if (i.pct_correct === null) return false;
+      const total = i.meaning_correct + i.meaning_incorrect + i.reading_correct + i.reading_incorrect;
+      if (total < MIN_ANSWERS || i.pct_correct >= LEECH_THRESHOLD) return false;
+      // "Critical" mirrors WaniKani's own dashboard definition: Guru or
+      // higher, so it's an item you supposedly know well, still slipping.
+      if (criticalOnly && i.srs_stage < 5) return false;
+      return true;
+    })
+    .sort((a, b) => a.pct_correct - b.pct_correct);
+
+  document.getElementById("leech-empty-hint").style.display = leeches.length ? "none" : "block";
+  document.getElementById("leechTable").style.display = leeches.length ? "" : "none";
+
+  document.getElementById("leechBody").innerHTML = leeches.map((item) => {
+    const sg = srsGroup(item.srs_stage);
+    const wrong = item.meaning_incorrect + item.reading_incorrect;
+    const total = item.meaning_correct + item.meaning_incorrect + item.reading_correct + item.reading_incorrect;
+    return `<tr>
+      <td><span class="char">${item.characters ?? "—"}</span></td>
+      <td><span class="badge type-${item.type}">${item.type.slice(0,3).toUpperCase()}</span></td>
+      <td>${item.level}</td>
+      <td class="srs-${sg}">${srsLabel(item.srs_stage)}</td>
+      <td>${item.meanings.slice(0, 3).join(", ")}</td>
+      <td style="color:${item.pct_correct < 50 ? "#e82828" : "#e8a228"};font-weight:700">${item.pct_correct}%</td>
+      <td>${wrong} / ${total}</td>
+    </tr>`;
+  }).join("");
 }
 
 // ── TEXT TAB ─────────────────────────────────────────────────────────────────
