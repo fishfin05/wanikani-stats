@@ -20,6 +20,7 @@ async function loadDynamic() {
       if (result?.statusCode === 200 && result.stream) {
         const blob = await new Response(result.stream).json();
         return {
+          subjects: blob.subjects ?? [],
           assignments: blob.assignments ?? [],
           reviewStats: blob.reviewStats ?? [],
           levelProgressions: blob.levelProgressions ?? [],
@@ -36,6 +37,7 @@ async function loadDynamic() {
   const metaPath = join(DATA, "meta.json");
   const meta = existsSync(metaPath) ? JSON.parse(readFileSync(metaPath, "utf8")) : {};
   return {
+    subjects: loadJson("subjects"),
     assignments: loadJson("assignments"),
     reviewStats: loadJson("review_statistics"),
     levelProgressions: loadJson("level_progressions"),
@@ -89,11 +91,14 @@ function buildActivitySummary(assignments) {
 }
 
 async function buildApiData() {
-  const subjects   = loadJson("subjects");
   const jlpt       = JSON.parse(readFileSync(join(DATA, "jlpt.json"), "utf8"));
   const jlptVocab  = JSON.parse(readFileSync(join(DATA, "jlpt_vocab.json"), "utf8"));
   const dynamic    = await loadDynamic();
   const { assignments, reviewStats, levelProgressions, syncedAt, fromBlob } = dynamic;
+  // Prefer the Blob-cached subject catalog (kept fresh by sync, independent
+  // of whatever data/subjects.json happened to be bundled at deploy time);
+  // only fall back to the bundled file if Blob has never had any yet.
+  const subjects = dynamic.subjects?.length ? dynamic.subjects : loadJson("subjects");
   // review_statistics accumulates every meaning/reading answer ever given per
   // item, so summing it is a true all-time review count — unlike per-review
   // timestamps, this aggregate survived the 2023 API restriction.

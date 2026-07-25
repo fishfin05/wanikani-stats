@@ -16,7 +16,8 @@ async function wkFetch(url, apiKey) {
 }
 
 async function fetchAll(endpoint, apiKey, updatedAfter) {
-  const qs = updatedAfter ? `?updated_after=${encodeURIComponent(updatedAfter)}` : "";
+  const joiner = endpoint.includes("?") ? "&" : "?";
+  const qs = updatedAfter ? `${joiner}updated_after=${encodeURIComponent(updatedAfter)}` : "";
   let url = `${WK_API}/${endpoint}${qs}`;
   const items = [];
   while (url) {
@@ -28,6 +29,14 @@ async function fetchAll(endpoint, apiKey, updatedAfter) {
   return items;
 }
 
+// Only keep fields api/data.js actually uses — mirrors the standalone sync.js slimming.
+function slimSubject(s) {
+  if (!s.data) return s; // already slimmed
+  return { id: s.id, type: s.object, level: s.data.level,
+           characters: s.data.characters ?? s.data.slug,
+           meanings: (s.data.meanings ?? []).map((m) => m.meaning),
+           readings: (s.data.readings ?? []).map((r) => r.reading) };
+}
 function slimAssignment(a) {
   if (!a.data) return a; // already slimmed
   return { id: a.id, subject_id: a.data.subject_id, srs_stage: a.data.srs_stage,
@@ -114,6 +123,7 @@ export default async function handler(req, res) {
       const meta = existsSync(metaPath) ? JSON.parse(readFileSync(metaPath, "utf8")) : {};
       existing = {
         syncedAt: meta.syncedAt ?? null,
+        subjects: loadBundled("subjects"),
         assignments: loadBundled("assignments"),
         reviewStats: loadBundled("review_statistics"),
         levelProgressions: loadBundled("level_progressions"),
@@ -121,6 +131,7 @@ export default async function handler(req, res) {
     }
 
     // Migrate old full-format Blob to slim format in one pass
+    existing.subjects          = (existing.subjects ?? []).map(slimSubject);
     existing.assignments       = existing.assignments.map(slimAssignment);
     existing.reviewStats       = existing.reviewStats.map(slimReviewStat);
     existing.levelProgressions = existing.levelProgressions.map(slimLevelProg);
@@ -131,18 +142,27 @@ export default async function handler(req, res) {
     // user's queue would never pick up a newly-added field otherwise.
     const forceFull = req.query?.full === "1" || req.query?.full === "true";
     const updatedAfter = forceFull ? null : existing.syncedAt;
+    // Subjects (the kanji/vocab/radical catalog) rarely change, but if the
+    // Blob cache has never had any yet — e.g. the bundled data/subjects.json
+    // this deploy shipped with was missing or stale — force a full pull so
+    // the site is never silently stuck with zero items. This makes subjects
+    // self-healing on the next sync instead of depending on deploy-time
+    // local file state.
+    const subjectsUpdatedAfter = (forceFull || existing.subjects.length === 0) ? null : existing.syncedAt;
     const syncedAt = new Date().toISOString();
 
     // Fetch only items changed since last sync, slim before merging
+    const newSubjects          = (await fetchAll("subjects?types=radical,kanji,vocabulary", apiKey, subjectsUpdatedAfter)).map(slimSubject);
     const newAssignments       = (await fetchAll("assignments",        apiKey, updatedAfter)).map(slimAssignment);
     const newReviewStats       = (await fetchAll("review_statistics",  apiKey, updatedAfter)).map(slimReviewStat);
     const newLevelProgressions = (await fetchAll("level_progressions", apiKey, updatedAfter)).map(slimLevelProg);
 
+    const subjects           = mergeById(existing.subjects,          newSubjects);
     const assignments       = mergeById(existing.assignments,       newAssignments);
     const reviewStats       = mergeById(existing.reviewStats,       newReviewStats);
     const levelProgressions = mergeById(existing.levelProgressions, newLevelProgressions);
 
-    await put("wk-dynamic.json", JSON.stringify({ syncedAt, assignments, reviewStats, levelProgressions }), {
+    await put("wk-dynamic.json", JSON.stringify({ syncedAt, subjects, assignments, reviewStats, levelProgressions }), {
       access: "private",
       addRandomSuffix: false,
       allowOverwrite: true,
@@ -155,10 +175,11 @@ export default async function handler(req, res) {
       incremental: !!existing.syncedAt && !forceFull,
       full: forceFull,
       updatedAfter,
+      subjects: subjects.length,
       assignments: assignments.length,
       reviewStats: reviewStats.length,
       levelProgressions: levelProgressions.length,
-      newItems: newAssignments.length + newReviewStats.length + newLevelProgressions.length,
+      newItems: newSubjects.length + newAssignments.length + newReviewStats.length + newLevelProgressions.length,
       elapsed: `${elapsed}s`,
     });
   } catch (e) {
