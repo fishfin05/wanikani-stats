@@ -53,23 +53,24 @@ function loadConfig() {
   };
 }
 
-// State holds notification cooldowns plus the review count seen on the previous
-// run, which is what makes "a new batch just arrived" detectable at all. If it's
-// ever lost (cache eviction, first run) a missing/corrupt file is treated as "no
-// history" rather than a hard error — the run re-baselines against the current
-// count, so the cost is one missed batch announcement, never a false one.
+// State holds notification cooldowns plus the review count as of the last time
+// you were actually told about it. Normalized on load so a missing, corrupt, or
+// older-format file degrades to "you haven't been told about anything" rather
+// than failing — which errs toward one redundant notification instead of
+// silently swallowing a batch.
 function loadState() {
+  let raw = {};
   try {
-    return JSON.parse(readFileSync(STATE_PATH, "utf8"));
+    raw = JSON.parse(readFileSync(STATE_PATH, "utf8"));
   } catch {
-    return {
-      lastBatchNotifyAt: null,
-      lastReviewNotifyAt: null,
-      lastLessonNotifyAt: null,
-      lastSeenReviews: null,
-      pendingNew: 0,
-    };
+    /* no history */
   }
+  return {
+    lastBatchNotifyAt: raw.lastBatchNotifyAt ?? null,
+    lastReviewNotifyAt: raw.lastReviewNotifyAt ?? null,
+    lastLessonNotifyAt: raw.lastLessonNotifyAt ?? null,
+    announcedReviewCount: raw.announcedReviewCount ?? 0,
+  };
 }
 
 // Best-effort: by the time this runs a notification may already have been sent,
@@ -90,21 +91,21 @@ function saveState(state) {
   }
 }
 
-// Fold a fresh review count into the running "arrived since you were last told"
-// counter. WaniKani releases reviews in batches on the SRS clock, so the event
-// worth announcing is the arrival, not the raw total sitting there.
+// How many of the currently-available reviews you haven't been told about yet.
 //
-// A count that went *down* means you've been doing reviews, which retires
-// anything pending — you've clearly seen the queue, so re-announcing it would
-// just be nagging. Anything already counted stays counted otherwise, so batches
-// that land during quiet hours accumulate instead of being lost.
-function trackNewBatch(state, reviews) {
-  const seen = state.lastSeenReviews ?? reviews; // first run: no phantom batch
-  const carried = reviews < seen ? 0 : state.pendingNew ?? 0;
-  return {
-    pendingNew: carried + Math.max(0, reviews - seen),
-    lastSeenReviews: reviews,
-  };
+// Deliberately measured against the count at the last *notification*, not a
+// run-to-run delta. GitHub drops and delays scheduled runs, and a delta counter
+// loses any batch that lands during a gap — one skipped run and the batch is
+// gone forever. Comparing against what was last announced means a missed run
+// only makes the notification late, never absent, and it needs no state at all
+// to be correct: an evicted cache reads as "nothing announced yet", which
+// re-announces the queue rather than swallowing it.
+//
+// A queue that shrank means you're working through it, so the baseline follows
+// it down — you've plainly seen what's left, and it shouldn't be re-announced.
+function unannouncedReviews(state, reviews) {
+  const announced = Math.min(state.announcedReviewCount ?? 0, reviews);
+  return { announcedReviewCount: announced, unannounced: reviews - announced };
 }
 
 // ── local-time helpers ──────────────────────────────────────────────────────
@@ -277,10 +278,11 @@ async function main() {
   const now = localNow(new Date(), cfg.timezone);
   const summary = await fetchSummary(apiKey);
 
-  // Deliberately before the DND/quiet-day checks below: tracking has to keep
-  // running while you're asleep so an overnight batch is still pending — and
-  // gets announced — the moment the quiet window lifts.
-  Object.assign(state, trackNewBatch(state, summary.reviews));
+  // Runs before the DND/quiet-day checks below so the baseline still follows a
+  // shrinking queue while you're asleep. Anything that arrives during quiet
+  // hours simply stays unannounced and goes out once the window lifts.
+  const { announcedReviewCount, unannounced } = unannouncedReviews(state, summary.reviews);
+  state.announcedReviewCount = announcedReviewCount;
 
   // The API only knows the full unlocked lesson backlog (e.g. 53); the
   // dashboard's "Today's Lessons" is the web-only daily cap minus whatever
@@ -296,27 +298,27 @@ async function main() {
       ? summary.lessons
       : Math.max(0, Math.min(summary.lessons, cfg.dailyLessonCap - doneToday));
 
-  // Completing more lessons than the cap allows is impossible through the
-  // normal flow, so it's a strong hint that the cap was raised in WaniKani
-  // and config.json wasn't updated — the one value that can't be verified
-  // against the API. (Also reachable via the Advanced lesson override.)
+  // WaniKani's cap is a *recommendation*, not a limit — the lesson picker will
+  // happily go past it — so overshooting is normal and not worth warning about.
+  // It's only worth a note because it's the one number that can't be verified
+  // against the API, so a persistent overshoot may just mean the cap was raised
+  // in WaniKani and config.json wasn't updated to match.
   if (cfg.dailyLessonCap !== null && doneToday > cfg.dailyLessonCap) {
-    console.warn(
-      `warning: ${doneToday} lessons completed today exceeds dailyLessonCap ` +
-        `(${cfg.dailyLessonCap}) — raise it in notify/config.json to match ` +
-        `WaniKani, unless these came from the Advanced lesson override.`
+    console.log(
+      `note: ${doneToday} lessons done today, past the recommended ` +
+        `${cfg.dailyLessonCap}. Normal via the lesson picker; only update ` +
+        `dailyLessonCap in notify/config.json if you raised it in WaniKani.`
     );
   }
 
-  // Persist before logging so the batch counter survives even on runs that
-  // decide to stay quiet — otherwise every arrival during DND would be
-  // forgotten by the next run. Skipped on dry runs so testing locally can't
-  // consume a batch the real run should have announced.
+  // Persist even on runs that stay quiet, so a baseline that followed the queue
+  // down isn't re-raised by the next run. Skipped on dry runs so testing locally
+  // can't consume a batch the real run should have announced.
   const finish = (verdict) => {
     if (!DRY_RUN && JSON.stringify(state) !== stateBefore) saveState(state);
     console.log(
       `${now.weekday} ${now.label} ${cfg.timezone} | ` +
-        `${summary.reviews} reviews (+${state.pendingNew} new), ` +
+        `${summary.reviews} reviews (${unannounced} unannounced), ` +
         `${lessonsToday} lessons today ` +
         `(${doneToday} done, ${summary.lessons} unlocked) | ${verdict}`
     );
@@ -334,7 +336,7 @@ async function main() {
   // backstop for a pile you've already been told about and haven't touched.
   // Lessons sit there forever until you do them, so they get a much slower
   // nudge of their own rather than firing every cooldown window.
-  const batchReady = cfg.notifyOnNewBatch && state.pendingNew >= cfg.newBatchMinSize;
+  const batchReady = cfg.notifyOnNewBatch && unannounced >= cfg.newBatchMinSize;
   const batchCooled = minutesSince(state.lastBatchNotifyAt) >= cfg.newBatchCooldownMinutes;
   const reviewsReady = summary.reviews >= cfg.reviewThreshold;
   const lessonsReady = lessonsToday >= cfg.lessonThreshold;
@@ -367,7 +369,7 @@ async function main() {
       return finish(`skip: cooldown, ${wait} min left`);
     }
     return finish(
-      `skip: nothing new (need ${cfg.newBatchMinSize} new or ${cfg.reviewThreshold} waiting)`
+      `skip: nothing new (need ${cfg.newBatchMinSize} unannounced or ${cfg.reviewThreshold} waiting)`
     );
   }
 
@@ -383,11 +385,11 @@ async function main() {
   if (kind === "batch") {
     // When the queue was empty the new count and the total are the same number,
     // so saying both just reads like a stutter.
-    const fresh = plural(state.pendingNew, "new review");
+    const fresh = plural(unannounced, "new review");
     payload = {
       title: `${fresh} up`,
       message:
-        (state.pendingNew === summary.reviews
+        (unannounced === summary.reviews
           ? `${plural(summary.reviews, "review")} ready`
           : `${fresh} · ${summary.reviews} waiting in total`) +
         lessonNote +
@@ -425,16 +427,16 @@ async function main() {
   if (kind === "batch") state.lastBatchNotifyAt = sentAt;
   else if (kind === "review") state.lastReviewNotifyAt = sentAt;
   else state.lastLessonNotifyAt = sentAt;
-  // Both review notifications report the current queue, so anything pending has
+  // Both review notifications report the current queue, so the whole thing has
   // now been announced either way.
-  if (kind !== "lesson") state.pendingNew = 0;
+  if (kind !== "lesson") state.announcedReviewCount = summary.reviews;
 
   finish(`SENT (${kind}): ${payload.title}`);
 }
 
 // Exported for notify/notify.test.js; only auto-run when invoked directly so
 // importing the pure helpers doesn't fire a real notification.
-export { inDndWindow, parseHHMM, localNow, minutesSince, startOfLocalDay, trackNewBatch };
+export { inDndWindow, parseHHMM, localNow, minutesSince, startOfLocalDay, unannouncedReviews };
 
 if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {
   main().catch((e) => {

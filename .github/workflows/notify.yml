@@ -5,11 +5,17 @@ name: WaniKani review notifier
 # here is UTC-only and can't express "10pm your time" across DST, so the real
 # scheduling logic deliberately lives in the script instead.
 #
-# Note: GitHub disables scheduled workflows after 60 days with no repo activity,
-# and cron runs can be delayed under load — the cooldown logic tolerates both.
+# GitHub treats schedules as best-effort and sheds them hardest at the top of
+# the hour and on the quarter marks, so these offsets deliberately avoid :00,
+# :15, :30 and :45. Runs are still dropped and delayed regularly — notify.js
+# measures against the last notification rather than the last run so a skipped
+# run makes a notification late instead of losing it entirely.
+#
+# Note: GitHub also disables scheduled workflows after 60 days with no repo
+# activity.
 on:
   schedule:
-    - cron: "*/15 * * * *"
+    - cron: "4,19,34,49 * * * *"
   workflow_dispatch:
     inputs:
       dry_run:
