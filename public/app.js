@@ -516,6 +516,7 @@ function buildPaceEta() {
     defaultPaceDays = null;
     buildMilestones();
     buildLevelDurationChart();
+    buildLevelProjectionChart();
     return;
   }
 
@@ -565,6 +566,7 @@ function buildPaceEta() {
 
   buildMilestones();
   buildLevelDurationChart();
+  buildLevelProjectionChart();
 }
 
 // ── MILESTONES ───────────────────────────────────────────────────────────────
@@ -719,6 +721,107 @@ function buildLevelDurationChart() {
       scales: {
         x: { ...BASE_SCALES.x },
         y: { ...BASE_SCALES.y, title: { display: true, text: "Days", color: "#7a80a0" } },
+      },
+    },
+  });
+}
+
+// ── LEVEL 60 PROJECTION ──────────────────────────────────────────────────────
+// Three honest lines instead of one fudged ETA number: a hard floor computed
+// purely from WK's fixed SRS mechanics (no history involved), your real
+// historical trend extrapolated forward, and a flat "if you stopped" line for
+// scale. X-axis is days-from-now on a linear scale (not a date/time scale —
+// no adapter loaded), converted to calendar dates only for display.
+const PROJECTION_CAP_DAYS = 3 * 365;
+
+function buildLevelProjectionChart() {
+  const canvas = document.getElementById("levelProjectionChart");
+  const note   = document.getElementById("level-projection-note");
+  if (!canvas) return;
+
+  const { currentLevel } = getCurrentLevelInfo();
+
+  if (currentLevel >= 60) {
+    destroyChart("levelProjection");
+    if (note) note.textContent = "Level 60 reached — nothing left to project.";
+    return;
+  }
+
+  const floorPoints = [{ x: 0, y: currentLevel }];
+  let cum = 0;
+  for (let L = currentLevel; L < 60; L++) {
+    cum += levelFloorDays(L);
+    floorPoints.push({ x: cum, y: L + 1 });
+  }
+
+  const pace = getEffectivePace();
+  let trendPoints = null;
+  let cappedNote = "";
+  if (pace) {
+    trendPoints = [{ x: 0, y: currentLevel }];
+    let tcum = 0;
+    for (let L = currentLevel; L < 60; L++) {
+      tcum += pace;
+      trendPoints.push({ x: tcum, y: L + 1 });
+    }
+    if (tcum > PROJECTION_CAP_DAYS) {
+      const levelsAtCap = currentLevel + PROJECTION_CAP_DAYS / pace;
+      trendPoints = trendPoints.filter((p) => p.x <= PROJECTION_CAP_DAYS);
+      trendPoints.push({ x: PROJECTION_CAP_DAYS, y: levelsAtCap });
+      cappedNote = `At your current trend, Lv 60 is ~${(tcum / 365).toFixed(1)} years away — chart capped at 3 years so the near term stays readable.`;
+    }
+  }
+  if (note) note.textContent = cappedNote;
+
+  const horizonEnd = Math.min(trendPoints ? trendPoints.at(-1).x : floorPoints.at(-1).x, PROJECTION_CAP_DAYS);
+  const zeroPoints = [{ x: 0, y: currentLevel }, { x: horizonEnd, y: currentLevel }];
+
+  const dateTick = (days) => new Date(Date.now() + days * 86400000).toLocaleDateString(undefined, { year: "2-digit", month: "short" });
+
+  const datasets = [
+    {
+      label: "Fastest possible", data: floorPoints,
+      borderColor: "#28e86e", backgroundColor: "transparent",
+      borderWidth: 2, pointRadius: 0, tension: 0,
+    },
+    trendPoints && {
+      label: "Your trend", data: trendPoints,
+      borderColor: "#28c4e8", backgroundColor: "transparent",
+      borderWidth: 2.5, pointRadius: 0, tension: 0,
+    },
+    {
+      label: "If you stopped", data: zeroPoints,
+      borderColor: "#7a80a0", backgroundColor: "transparent",
+      borderWidth: 1.5, borderDash: [6, 4], pointRadius: 0, tension: 0,
+    },
+  ].filter(Boolean);
+
+  destroyChart("levelProjection");
+  charts.levelProjection = new Chart(canvas.getContext("2d"), {
+    type: "line",
+    data: { datasets },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      interaction: { mode: "nearest", axis: "x", intersect: false },
+      plugins: {
+        legend: BASE_LEGEND,
+        tooltip: {
+          callbacks: {
+            title: (items) => dateTick(items[0]?.parsed?.x ?? 0),
+            label: (ctx) => `${ctx.dataset.label}: Lv ${ctx.parsed.y.toFixed(1)}`,
+          },
+        },
+      },
+      scales: {
+        x: {
+          ...BASE_SCALES.x, type: "linear", min: 0, max: horizonEnd,
+          title: { display: true, text: "Time from now", color: "#7a80a0" },
+          ticks: { ...BASE_SCALES.x.ticks, callback: dateTick },
+        },
+        y: {
+          ...BASE_SCALES.y, min: Math.max(1, currentLevel - 2), max: 60,
+          title: { display: true, text: "WK Level", color: "#7a80a0" },
+        },
       },
     },
   });
