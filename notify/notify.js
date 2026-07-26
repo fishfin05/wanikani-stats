@@ -262,6 +262,18 @@ async function main() {
       ? summary.lessons
       : Math.max(0, Math.min(summary.lessons, cfg.dailyLessonCap - doneToday));
 
+  // Completing more lessons than the cap allows is impossible through the
+  // normal flow, so it's a strong hint that the cap was raised in WaniKani
+  // and config.json wasn't updated — the one value that can't be verified
+  // against the API. (Also reachable via the Advanced lesson override.)
+  if (cfg.dailyLessonCap !== null && doneToday > cfg.dailyLessonCap) {
+    console.warn(
+      `warning: ${doneToday} lessons completed today exceeds dailyLessonCap ` +
+        `(${cfg.dailyLessonCap}) — raise it in notify/config.json to match ` +
+        `WaniKani, unless these came from the Advanced lesson override.`
+    );
+  }
+
   const log = (verdict) =>
     console.log(
       `${now.weekday} ${now.label} ${cfg.timezone} | ` +
