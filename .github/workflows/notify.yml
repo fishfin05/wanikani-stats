@@ -34,7 +34,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24"
 
       # Cooldown state has to survive between runs. Cache keys are immutable,
       # so each run writes a new uniquely-keyed entry and restores the most
@@ -48,16 +48,21 @@ jobs:
           restore-keys: notify-state-
 
       - name: Check WaniKani and notify
+        id: check
         env:
           WANIKANI_API_KEY: ${{ secrets.WANIKANI_API_KEY }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
         run: |
+          mkdir -p .notify-state
           node notify/notify.js \
             ${{ inputs.dry_run && '--dry-run' || '' }} \
             ${{ inputs.force && '--force' || '' }}
 
+      # Only re-upload when a notification actually fired — most runs decide to
+      # stay quiet and would otherwise churn out an identical cache entry every
+      # 15 minutes.
       - name: Save notifier state
-        if: always()
+        if: steps.check.outputs.state_changed == 'true'
         uses: actions/cache/save@v4
         with:
           path: .notify-state

@@ -14,7 +14,7 @@
 // Env: WANIKANI_API_KEY (required), NTFY_TOPIC (required unless --dry-run),
 //      NTFY_SERVER (optional, defaults to https://ntfy.sh)
 
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "fs";
+import { readFileSync, writeFileSync, mkdirSync, appendFileSync } from "fs";
 import { dirname, resolve } from "path";
 import { fileURLToPath } from "url";
 
@@ -52,9 +52,22 @@ function loadState() {
   }
 }
 
+// Best-effort: this only runs after a notification has already been sent, so
+// failing here must not fail the run. Losing the write costs at most one
+// duplicate notification later, which beats a red workflow and an alarming
+// failure email for something already delivered.
 function saveState(state) {
-  mkdirSync(dirname(STATE_PATH), { recursive: true });
-  writeFileSync(STATE_PATH, JSON.stringify(state, null, 2));
+  try {
+    mkdirSync(dirname(STATE_PATH), { recursive: true });
+    writeFileSync(STATE_PATH, JSON.stringify(state, null, 2));
+    // Lets the workflow skip re-uploading an unchanged cache on the ~96 runs a
+    // day that don't notify.
+    if (process.env.GITHUB_OUTPUT) {
+      appendFileSync(process.env.GITHUB_OUTPUT, "state_changed=true\n");
+    }
+  } catch (e) {
+    console.warn(`warning: could not persist cooldown state (${e.message})`);
+  }
 }
 
 // ── local-time helpers ──────────────────────────────────────────────────────
