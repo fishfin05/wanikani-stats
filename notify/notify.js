@@ -41,6 +41,9 @@ function loadConfig() {
     timezone: cfg.timezone ?? "UTC",
     dnd: cfg.dnd ?? null,
     quietDays: cfg.quietDays ?? [],
+    notifyOnNewBatch: cfg.notifyOnNewBatch ?? true,
+    newBatchMinSize: cfg.newBatchMinSize ?? 1,
+    newBatchCooldownMinutes: cfg.newBatchCooldownMinutes ?? 30,
     reviewThreshold: cfg.reviewThreshold ?? 10,
     lessonThreshold: cfg.lessonThreshold ?? 3,
     dailyLessonCap: cfg.dailyLessonCap ?? null,
@@ -50,33 +53,58 @@ function loadConfig() {
   };
 }
 
-// State only exists to enforce cooldowns. If it's ever lost (cache eviction,
-// first run) the worst case is one extra notification, so a missing/corrupt
-// file is treated as "no history" rather than a hard error.
+// State holds notification cooldowns plus the review count seen on the previous
+// run, which is what makes "a new batch just arrived" detectable at all. If it's
+// ever lost (cache eviction, first run) a missing/corrupt file is treated as "no
+// history" rather than a hard error — the run re-baselines against the current
+// count, so the cost is one missed batch announcement, never a false one.
 function loadState() {
   try {
     return JSON.parse(readFileSync(STATE_PATH, "utf8"));
   } catch {
-    return { lastReviewNotifyAt: null, lastLessonNotifyAt: null };
+    return {
+      lastBatchNotifyAt: null,
+      lastReviewNotifyAt: null,
+      lastLessonNotifyAt: null,
+      lastSeenReviews: null,
+      pendingNew: 0,
+    };
   }
 }
 
-// Best-effort: this only runs after a notification has already been sent, so
-// failing here must not fail the run. Losing the write costs at most one
-// duplicate notification later, which beats a red workflow and an alarming
-// failure email for something already delivered.
+// Best-effort: by the time this runs a notification may already have been sent,
+// so failing here must not fail the run. Losing the write costs at most one
+// duplicate or one missed batch announcement, which beats a red workflow and an
+// alarming failure email for something already delivered.
 function saveState(state) {
   try {
     mkdirSync(dirname(STATE_PATH), { recursive: true });
     writeFileSync(STATE_PATH, JSON.stringify(state, null, 2));
-    // Lets the workflow skip re-uploading an unchanged cache on the ~96 runs a
-    // day that don't notify.
+    // Lets the workflow skip re-uploading the cache on runs where nothing about
+    // the state actually moved.
     if (process.env.GITHUB_OUTPUT) {
       appendFileSync(process.env.GITHUB_OUTPUT, "state_changed=true\n");
     }
   } catch (e) {
-    console.warn(`warning: could not persist cooldown state (${e.message})`);
+    console.warn(`warning: could not persist notifier state (${e.message})`);
   }
+}
+
+// Fold a fresh review count into the running "arrived since you were last told"
+// counter. WaniKani releases reviews in batches on the SRS clock, so the event
+// worth announcing is the arrival, not the raw total sitting there.
+//
+// A count that went *down* means you've been doing reviews, which retires
+// anything pending — you've clearly seen the queue, so re-announcing it would
+// just be nagging. Anything already counted stays counted otherwise, so batches
+// that land during quiet hours accumulate instead of being lost.
+function trackNewBatch(state, reviews) {
+  const seen = state.lastSeenReviews ?? reviews; // first run: no phantom batch
+  const carried = reviews < seen ? 0 : state.pendingNew ?? 0;
+  return {
+    pendingNew: carried + Math.max(0, reviews - seen),
+    lastSeenReviews: reviews,
+  };
 }
 
 // ── local-time helpers ──────────────────────────────────────────────────────
@@ -240,13 +268,19 @@ async function main() {
   if (!apiKey) throw new Error("WANIKANI_API_KEY is not set");
 
   const topic = process.env.NTFY_TOPIC?.trim();
-  const server = process.env.NTFY_SERVER?.trim() || "https://ntfy.sh";
+  const server = process.env.NTFY_SERVER?.trim() || DEFAULT_NTFY_SERVER;
   if (!topic && !DRY_RUN) throw new Error("NTFY_TOPIC is not set");
 
   const cfg = loadConfig();
   const state = loadState();
+  const stateBefore = JSON.stringify(state);
   const now = localNow(new Date(), cfg.timezone);
   const summary = await fetchSummary(apiKey);
+
+  // Deliberately before the DND/quiet-day checks below: tracking has to keep
+  // running while you're asleep so an overnight batch is still pending — and
+  // gets announced — the moment the quiet window lifts.
+  Object.assign(state, trackNewBatch(state, summary.reviews));
 
   // The API only knows the full unlocked lesson backlog (e.g. 53); the
   // dashboard's "Today's Lessons" is the web-only daily cap minus whatever
@@ -274,88 +308,133 @@ async function main() {
     );
   }
 
-  const log = (verdict) =>
+  // Persist before logging so the batch counter survives even on runs that
+  // decide to stay quiet — otherwise every arrival during DND would be
+  // forgotten by the next run. Skipped on dry runs so testing locally can't
+  // consume a batch the real run should have announced.
+  const finish = (verdict) => {
+    if (!DRY_RUN && JSON.stringify(state) !== stateBefore) saveState(state);
     console.log(
       `${now.weekday} ${now.label} ${cfg.timezone} | ` +
-        `${summary.reviews} reviews, ${lessonsToday} lessons today ` +
+        `${summary.reviews} reviews (+${state.pendingNew} new), ` +
+        `${lessonsToday} lessons today ` +
         `(${doneToday} done, ${summary.lessons} unlocked) | ${verdict}`
     );
+  };
 
   if (!FORCE) {
-    if (cfg.quietDays.includes(now.weekday)) return log(`skip: quiet day (${now.weekday})`);
+    if (cfg.quietDays.includes(now.weekday)) return finish(`skip: quiet day (${now.weekday})`);
     if (inDndWindow(now.minutes, cfg.dnd))
-      return log(`skip: DND ${cfg.dnd.start}–${cfg.dnd.end}`);
+      return finish(`skip: DND ${cfg.dnd.start}–${cfg.dnd.end}`);
   }
 
-  // Reviews are the real trigger: they expire in the sense that a growing
-  // backlog is what actually hurts. Lessons sit there forever until you do
-  // them, so they get a much slower nudge of their own rather than firing
-  // every cooldown window and turning into noise.
+  // Two separate review triggers, because they answer different questions.
+  // The batch trigger is the primary one: it fires on arrival, so every SRS
+  // batch gets announced no matter how small. The threshold trigger is the
+  // backstop for a pile you've already been told about and haven't touched.
+  // Lessons sit there forever until you do them, so they get a much slower
+  // nudge of their own rather than firing every cooldown window.
+  const batchReady = cfg.notifyOnNewBatch && state.pendingNew >= cfg.newBatchMinSize;
+  const batchCooled = minutesSince(state.lastBatchNotifyAt) >= cfg.newBatchCooldownMinutes;
   const reviewsReady = summary.reviews >= cfg.reviewThreshold;
-  const reviewCooled = minutesSince(state.lastReviewNotifyAt) >= cfg.cooldownMinutes;
   const lessonsReady = lessonsToday >= cfg.lessonThreshold;
   const lessonCooled = minutesSince(state.lastLessonNotifyAt) >= cfg.lessonCooldownMinutes;
 
-  // The lesson nudge also waits out the general cooldown, not just its own.
-  // Review notifications already include the lesson count, so letting the two
-  // cooldowns run independently would fire a redundant second buzz moments
-  // after a review ping.
+  // The backstop and lesson nudges wait out a cooldown measured from *any*
+  // notification, not just their own kind. Every notification already carries
+  // the review and lesson counts, so independent cooldowns would fire a
+  // redundant second buzz moments after the first.
   const lastAnyNotifyAt =
-    [state.lastReviewNotifyAt, state.lastLessonNotifyAt].filter(Boolean).sort().at(-1) ?? null;
+    [state.lastBatchNotifyAt, state.lastReviewNotifyAt, state.lastLessonNotifyAt]
+      .filter(Boolean)
+      .sort()
+      .at(-1) ?? null;
   const anyCooled = minutesSince(lastAnyNotifyAt) >= cfg.cooldownMinutes;
 
   let kind = null;
   if (FORCE) kind = "review";
-  else if (reviewsReady && reviewCooled) kind = "review";
+  else if (batchReady && batchCooled) kind = "batch";
+  else if (reviewsReady && anyCooled) kind = "review";
   else if (lessonsReady && lessonCooled && anyCooled) kind = "lesson";
 
   if (!kind) {
-    if (reviewsReady && !reviewCooled) {
-      const wait = Math.ceil(cfg.cooldownMinutes - minutesSince(state.lastReviewNotifyAt));
-      return log(`skip: cooldown, ${wait} min left`);
+    if (batchReady && !batchCooled) {
+      const wait = Math.ceil(cfg.newBatchCooldownMinutes - minutesSince(state.lastBatchNotifyAt));
+      return finish(`skip: batch cooldown, ${wait} min left`);
     }
-    return log(`skip: below threshold (need ${cfg.reviewThreshold} reviews)`);
+    if (reviewsReady && !anyCooled) {
+      const wait = Math.ceil(cfg.cooldownMinutes - minutesSince(lastAnyNotifyAt));
+      return finish(`skip: cooldown, ${wait} min left`);
+    }
+    return finish(
+      `skip: nothing new (need ${cfg.newBatchMinSize} new or ${cfg.reviewThreshold} waiting)`
+    );
   }
 
   const urgent = summary.reviews >= cfg.urgentReviewCount;
+  const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
   const backlogNote =
     cfg.dailyLessonCap !== null && summary.lessons > lessonsToday
       ? ` (${summary.lessons} unlocked)`
       : "";
-  const payload =
-    kind === "review"
-      ? {
-          title: urgent ? `${summary.reviews} reviews piling up` : `${summary.reviews} reviews ready`,
-          message:
-            `${summary.reviews} reviews waiting` +
-            (lessonsToday ? ` · ${lessonsToday} lessons today${backlogNote}` : "") +
-            describeNext(summary.nextReviewAt, cfg.timezone),
-          priority: urgent ? 4 : 3,
-          tags: urgent ? ["warning", "books"] : ["books"],
-        }
-      : {
-          title: `${lessonsToday} lessons for today`,
-          message:
-            `${lessonsToday} lessons ready to start${backlogNote}` +
-            (summary.reviews ? ` · ${summary.reviews} reviews ready too` : ""),
-          priority: 2,
-          tags: ["seedling"],
-        };
+  const lessonNote = lessonsToday ? ` · ${lessonsToday} lessons today${backlogNote}` : "";
 
-  if (DRY_RUN) return log(`WOULD SEND (${kind}): ${payload.title} — ${payload.message.replace(/\n/g, " ")}`);
+  let payload;
+  if (kind === "batch") {
+    // When the queue was empty the new count and the total are the same number,
+    // so saying both just reads like a stutter.
+    const fresh = plural(state.pendingNew, "new review");
+    payload = {
+      title: `${fresh} up`,
+      message:
+        (state.pendingNew === summary.reviews
+          ? `${plural(summary.reviews, "review")} ready`
+          : `${fresh} · ${summary.reviews} waiting in total`) +
+        lessonNote +
+        describeNext(summary.nextReviewAt, cfg.timezone),
+      priority: urgent ? 4 : 3,
+      tags: ["books"],
+    };
+  } else if (kind === "review") {
+    payload = {
+      title: urgent ? `${summary.reviews} reviews piling up` : `${summary.reviews} reviews ready`,
+      message:
+        `${summary.reviews} reviews waiting` +
+        lessonNote +
+        describeNext(summary.nextReviewAt, cfg.timezone),
+      priority: urgent ? 4 : 3,
+      tags: urgent ? ["warning", "books"] : ["books"],
+    };
+  } else {
+    payload = {
+      title: `${lessonsToday} lessons for today`,
+      message:
+        `${lessonsToday} lessons ready to start${backlogNote}` +
+        (summary.reviews ? ` · ${summary.reviews} reviews ready too` : ""),
+      priority: 2,
+      tags: ["seedling"],
+    };
+  }
+
+  if (DRY_RUN)
+    return finish(`WOULD SEND (${kind}): ${payload.title} — ${payload.message.replace(/\n/g, " ")}`);
 
   await sendNtfy({ topic, server, ...payload });
 
-  if (kind === "review") state.lastReviewNotifyAt = new Date().toISOString();
-  else state.lastLessonNotifyAt = new Date().toISOString();
-  saveState(state);
+  const sentAt = new Date().toISOString();
+  if (kind === "batch") state.lastBatchNotifyAt = sentAt;
+  else if (kind === "review") state.lastReviewNotifyAt = sentAt;
+  else state.lastLessonNotifyAt = sentAt;
+  // Both review notifications report the current queue, so anything pending has
+  // now been announced either way.
+  if (kind !== "lesson") state.pendingNew = 0;
 
-  log(`SENT (${kind}): ${payload.title}`);
+  finish(`SENT (${kind}): ${payload.title}`);
 }
 
 // Exported for notify/notify.test.js; only auto-run when invoked directly so
 // importing the pure helpers doesn't fire a real notification.
-export { inDndWindow, parseHHMM, localNow, minutesSince, startOfLocalDay };
+export { inDndWindow, parseHHMM, localNow, minutesSince, startOfLocalDay, trackNewBatch };
 
 if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {
   main().catch((e) => {

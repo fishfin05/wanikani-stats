@@ -1,21 +1,19 @@
 {
   "timezone": "America/Los_Angeles",
-
   "dnd": {
-    "start": "22:30",
-    "end": "08:00"
+    "start": "23:00",
+    "end": "10:30"
   },
-
   "quietDays": [],
-
+  "//notifyOnNewBatch": "Notify whenever new reviews become available, however few. This is the main trigger; reviewThreshold below is only the backstop nag for a pile you've already been told about.",
+  "notifyOnNewBatch": true,
+  "newBatchMinSize": 1,
+  "newBatchCooldownMinutes": 30,
   "reviewThreshold": 10,
   "lessonThreshold": 3,
-
   "//dailyLessonCap": "WaniKani's 'Maximum Recommended Daily Lessons' is a web-app-only setting, not exposed in API v2 — set it here to match. Lessons already completed today are derived from the API, so the notifier tracks the dashboard's countdown automatically. null = ignore the cap and use the full unlocked backlog.",
   "dailyLessonCap": 15,
-
   "cooldownMinutes": 180,
   "lessonCooldownMinutes": 1200,
-
   "urgentReviewCount": 100
 }

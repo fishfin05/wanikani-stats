@@ -1,7 +1,7 @@
 // Tests for the do-not-disturb / time logic — the parts that decide whether
 // you get woken up, and that are otherwise only observable by waiting around
 // until 3am. Run with: node notify/notify.test.js
-import { inDndWindow, parseHHMM, localNow, startOfLocalDay } from "./notify.js";
+import { inDndWindow, parseHHMM, localNow, startOfLocalDay, trackNewBatch } from "./notify.js";
 
 let failures = 0;
 function check(name, actual, expected) {
@@ -68,6 +68,29 @@ check("PST evening → 08:00Z midnight", sod("2026-01-15T18:14:00-08:00"), "2026
 check("PDT 00:05 local → same day",    sod("2026-07-25T00:05:00-07:00"), "2026-07-25T07:00:00.000Z");
 // A UTC instant that has already rolled over while it's still "yesterday" locally.
 check("PDT 17:00 (00:00Z next day)",   sod("2026-07-25T17:00:00-07:00"), "2026-07-25T07:00:00.000Z");
+
+// ── new-batch detection ────────────────────────────────────────────────────
+// Decides whether an arriving SRS batch gets announced. Over-firing here means
+// phantom notifications; under-firing means silently missing a batch.
+const track = (state, reviews) => trackNewBatch(state, reviews).pendingNew;
+const fresh = { lastSeenReviews: null, pendingNew: 0 };
+
+check("first run never invents a batch",  track(fresh, 42), 0);
+check("first run baselines the count",    trackNewBatch(fresh, 42).lastSeenReviews, 42);
+check("arrival counts as new",            track({ lastSeenReviews: 0, pendingNew: 0 }, 5), 5);
+check("unchanged count adds nothing",     track({ lastSeenReviews: 5, pendingNew: 5 }, 5), 5);
+// Batches landing during DND have to stack up, not overwrite each other, or the
+// morning notification would only report the last one.
+check("overnight batches accumulate",     track({ lastSeenReviews: 5, pendingNew: 5 }, 12), 12);
+check("accumulates onto prior pending",   track({ lastSeenReviews: 10, pendingNew: 3 }, 14), 7);
+// A falling count means you're actively doing reviews — you've seen the queue,
+// so pending is retired rather than re-announced at you.
+check("doing reviews clears pending",     track({ lastSeenReviews: 20, pendingNew: 20 }, 8), 0);
+check("clearing the queue clears pending", track({ lastSeenReviews: 20, pendingNew: 20 }, 0), 0);
+check("count still tracked after drop",   trackNewBatch({ lastSeenReviews: 20, pendingNew: 20 }, 8).lastSeenReviews, 8);
+// Lost cache / corrupt state: re-baseline silently instead of claiming the whole
+// backlog just arrived.
+check("missing pendingNew tolerated",     track({ lastSeenReviews: 4 }, 9), 5);
 
 console.log(failures ? `\n${failures} test(s) failed` : "\nAll tests passed");
 process.exit(failures ? 1 : 0);

@@ -24,12 +24,35 @@ Everything lives in [`config.json`](./config.json):
 | `timezone` | IANA zone for all time logic. DST is handled automatically. |
 | `dnd.start` / `dnd.end` | Quiet hours. Wraps midnight (`22:30`→`08:00`). Set both equal to disable. |
 | `quietDays` | Weekdays to skip entirely, e.g. `["Sat", "Sun"]`. |
-| `reviewThreshold` | Minimum reviews waiting before a notification fires. |
+| `notifyOnNewBatch` | Notify every time new reviews become available. The main trigger — set `false` to go back to threshold-only. |
+| `newBatchMinSize` | How many reviews have to arrive before it's worth a buzz. `1` = every batch. |
+| `newBatchCooldownMinutes` | Minimum gap between batch notifications. |
+| `reviewThreshold` | Backstop: minimum reviews waiting before the "you're sitting on a pile" nag fires. |
 | `lessonThreshold` | Minimum *today's* lessons before the gentler lesson nudge fires. |
 | `dailyLessonCap` | Mirror of WaniKani's **Maximum Recommended Daily Lessons**. See caveat below. |
 | `cooldownMinutes` | Minimum gap between notifications. |
 | `lessonCooldownMinutes` | Extra-long gap for lesson nudges (they'd otherwise repeat forever). |
 | `urgentReviewCount` | Above this, the notification is sent at high priority. |
+
+### When notifications fire
+
+WaniKani releases reviews in batches on the SRS clock, so the thing worth being
+told about is the *arrival*, not the total sitting there. Each run compares the
+available review count against the previous run's and notifies when it went up.
+
+Three triggers, in priority order:
+
+1. **New batch** — reviews arrived since the last check. Fires however small the
+   batch is, subject to `newBatchMinSize` and `newBatchCooldownMinutes`.
+2. **Backstop nag** — `reviewThreshold`+ reviews still waiting, no more often
+   than `cooldownMinutes`. Catches a pile you were already told about and
+   ignored.
+3. **Lesson nudge** — the slow one, on `lessonCooldownMinutes`.
+
+Batches arriving during quiet hours accumulate rather than being lost, so the
+first run after DND lifts announces everything that landed overnight at once. A
+review count that goes *down* means you're working through the queue, which
+retires anything pending — you've seen it, so it won't be re-announced.
 
 ### The `dailyLessonCap` caveat
 
@@ -73,8 +96,12 @@ notifier* → **Run workflow**, which exposes the same dry-run and force flags.
 
 GitHub cron is UTC-only and can't express "10pm your time" across DST, so the
 workflow runs on a dumb fixed interval and all real logic lives in the script.
-Cooldown state persists between runs via the Actions cache; if it's ever
-evicted, the worst case is one extra notification.
+
+The 15-minute interval is also the resolution of batch detection — a batch is
+noticed up to 15 minutes after it lands. State (cooldowns plus the last seen
+review count) persists between runs via the Actions cache; if it's ever evicted
+the script re-baselines against the current count, so the cost is one missed
+batch announcement rather than a false one.
 
 GitHub disables scheduled workflows after 60 days of repo inactivity, and cron
 runs can be delayed under load — the cooldown logic tolerates both.
