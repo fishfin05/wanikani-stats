@@ -22,6 +22,15 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const CONFIG_PATH = resolve(__dirname, "config.json");
 const STATE_PATH = resolve(__dirname, "..", ".notify-state", "state.json");
 
+const WK_API = "https://api.wanikani.com/v2";
+const WK_REVISION = "20170710";
+const WK_DASHBOARD = "https://www.wanikani.com/dashboard";
+const DEFAULT_NTFY_SERVER = "https://ntfy.sh";
+
+// Only mention the next review batch if it's near enough to be worth acting
+// on — "next batch in 9 hours" is just noise.
+const NEXT_BATCH_HORIZON_MINUTES = 12 * 60;
+
 const DRY_RUN = process.argv.includes("--dry-run");
 const FORCE = process.argv.includes("--force");
 
@@ -121,16 +130,59 @@ function inDndWindow(nowMinutes, dnd) {
 const minutesSince = (iso) =>
   iso ? (Date.now() - new Date(iso).getTime()) / 60000 : Infinity;
 
+// The UTC instant of the most recent local midnight, found by subtracting the
+// local wall-clock time elapsed so far today. Going through Intl rather than
+// assuming a fixed UTC offset keeps this correct across DST.
+function startOfLocalDay(now, timeZone) {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      hour12: false,
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    })
+      .formatToParts(now)
+      .map((p) => [p.type, p.value])
+  );
+  const elapsedMs =
+    ((Number(parts.hour) % 24) * 3600 + Number(parts.minute) * 60 + Number(parts.second)) * 1000;
+  return new Date(now.getTime() - elapsedMs);
+}
+
 // ── WaniKani ────────────────────────────────────────────────────────────────
-async function fetchSummary(apiKey) {
-  const res = await fetch("https://api.wanikani.com/v2/summary", {
+async function wkFetch(path, apiKey) {
+  const res = await fetch(`${WK_API}${path}`, {
     headers: {
       Authorization: `Bearer ${apiKey}`,
-      "Wanikani-Revision": "20170710",
+      "Wanikani-Revision": WK_REVISION,
     },
   });
   if (!res.ok) throw new Error(`WaniKani API ${res.status}: ${await res.text()}`);
-  const body = await res.json();
+  return res.json();
+}
+
+// How many lessons have been completed since local midnight. WaniKani's
+// "Today's Lessons" counts down from the daily cap as you work, so this is
+// what turns a static cap into the number actually shown on the dashboard.
+// An assignment's started_at is set when its lesson is completed.
+async function fetchLessonsCompletedToday(apiKey, since) {
+  let path = `/assignments?updated_after=${since.toISOString()}`;
+  let count = 0;
+  // updated_after also matches review activity, so a busy day can page.
+  while (path) {
+    const body = await wkFetch(path, apiKey);
+    count += body.data.filter(
+      (a) => a.data.started_at && new Date(a.data.started_at) >= since
+    ).length;
+    const next = body.pages?.next_url;
+    path = next ? next.replace(WK_API, "") : null;
+  }
+  return count;
+}
+
+async function fetchSummary(apiKey) {
+  const body = await wkFetch("/summary", apiKey);
 
   const now = Date.now();
   const countAvailable = (buckets) =>
@@ -161,7 +213,7 @@ async function sendNtfy({ topic, server, title, message, priority, tags }) {
       Title: title,
       Priority: String(priority),
       Tags: tags.join(","),
-      Click: "https://www.wanikani.com/dashboard",
+      Click: WK_DASHBOARD,
     },
     body: message,
   });
@@ -171,7 +223,7 @@ async function sendNtfy({ topic, server, title, message, priority, tags }) {
 function describeNext(nextReviewAt, timezone) {
   if (!nextReviewAt) return "";
   const mins = Math.round((new Date(nextReviewAt).getTime() - Date.now()) / 60000);
-  if (mins <= 0 || mins > 720) return "";
+  if (mins <= 0 || mins > NEXT_BATCH_HORIZON_MINUTES) return "";
   const when = new Date(nextReviewAt).toLocaleTimeString("en-US", {
     timeZone: timezone,
     hour: "numeric",
@@ -196,21 +248,25 @@ async function main() {
   const now = localNow(new Date(), cfg.timezone);
   const summary = await fetchSummary(apiKey);
 
-  // The API only knows the full unlocked lesson backlog; WaniKani's dashboard
-  // shows "Today's Lessons", which is that backlog clamped by the web-only
-  // "Maximum Recommended Daily Lessons" setting. Notifying on the raw backlog
-  // would tell you to do 53 lessons when your dashboard says 5, so the
-  // configured cap is applied here to keep the two in agreement.
+  // The API only knows the full unlocked lesson backlog (e.g. 53); the
+  // dashboard's "Today's Lessons" is the web-only daily cap minus whatever
+  // you've already done today, bounded by what's actually unlocked. Only the
+  // cap itself has to be configured — the rest is derived, so the number
+  // tracks your dashboard as you work through the day instead of going stale.
+  const doneToday =
+    cfg.dailyLessonCap === null
+      ? 0
+      : await fetchLessonsCompletedToday(apiKey, startOfLocalDay(new Date(), cfg.timezone));
   const lessonsToday =
     cfg.dailyLessonCap === null
       ? summary.lessons
-      : Math.min(summary.lessons, cfg.dailyLessonCap);
+      : Math.max(0, Math.min(summary.lessons, cfg.dailyLessonCap - doneToday));
 
   const log = (verdict) =>
     console.log(
       `${now.weekday} ${now.label} ${cfg.timezone} | ` +
         `${summary.reviews} reviews, ${lessonsToday} lessons today ` +
-        `(${summary.lessons} unlocked) | ${verdict}`
+        `(${doneToday} done, ${summary.lessons} unlocked) | ${verdict}`
     );
 
   if (!FORCE) {
@@ -287,7 +343,7 @@ async function main() {
 
 // Exported for notify/notify.test.js; only auto-run when invoked directly so
 // importing the pure helpers doesn't fire a real notification.
-export { inDndWindow, parseHHMM, localNow, minutesSince };
+export { inDndWindow, parseHHMM, localNow, minutesSince, startOfLocalDay };
 
 if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {
   main().catch((e) => {

@@ -1,7 +1,7 @@
 // Tests for the do-not-disturb / time logic — the parts that decide whether
 // you get woken up, and that are otherwise only observable by waiting around
 // until 3am. Run with: node notify/notify.test.js
-import { inDndWindow, parseHHMM, localNow } from "./notify.js";
+import { inDndWindow, parseHHMM, localNow, startOfLocalDay } from "./notify.js";
 
 let failures = 0;
 function check(name, actual, expected) {
@@ -57,6 +57,17 @@ const winter = localNow(new Date("2026-01-15T16:00:00Z"), "America/Los_Angeles")
 const summer = localNow(new Date("2026-07-15T16:00:00Z"), "America/Los_Angeles");
 check("PST winter 16:00Z → 08:00", winter.minutes, at(8));
 check("PDT summer 16:00Z → 09:00", summer.minutes, at(9));
+
+// ── local-midnight boundary (drives the "lessons done today" count) ────────
+// Getting this wrong would count yesterday's lessons against today's cap, so
+// both DST offsets are pinned explicitly rather than assumed.
+const sod = (iso) => startOfLocalDay(new Date(iso), "America/Los_Angeles").toISOString();
+check("PDT evening → 07:00Z midnight", sod("2026-07-25T18:14:00-07:00"), "2026-07-25T07:00:00.000Z");
+check("PST evening → 08:00Z midnight", sod("2026-01-15T18:14:00-08:00"), "2026-01-15T08:00:00.000Z");
+// Just after local midnight the boundary must be the new day, not the old one.
+check("PDT 00:05 local → same day",    sod("2026-07-25T00:05:00-07:00"), "2026-07-25T07:00:00.000Z");
+// A UTC instant that has already rolled over while it's still "yesterday" locally.
+check("PDT 17:00 (00:00Z next day)",   sod("2026-07-25T17:00:00-07:00"), "2026-07-25T07:00:00.000Z");
 
 console.log(failures ? `\n${failures} test(s) failed` : "\nAll tests passed");
 process.exit(failures ? 1 : 0);

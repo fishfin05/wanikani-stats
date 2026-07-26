@@ -36,10 +36,24 @@ Everything lives in [`config.json`](./config.json):
 WaniKani's **Maximum Recommended Daily Lessons** is a web-app-only setting —
 it is not exposed anywhere in API v2. The API's `/summary` endpoint always
 reports the *full unlocked backlog* (e.g. 53), not the "Today's Lessons"
-number the dashboard shows (e.g. 5).
+number the dashboard shows.
 
-So `dailyLessonCap` has to be set by hand to match your WaniKani setting.
-Keep them in sync, or notifications will disagree with your dashboard.
+Only the cap itself is configured by hand. Everything else is derived:
+
+```
+today's lessons = clamp(cap − lessons completed today, 0, unlocked backlog)
+```
+
+Lessons completed today come from assignments whose `started_at` falls after
+local midnight, so the number counts down through the day exactly like the
+dashboard does rather than going stale.
+
+The one thing to keep in sync manually is `dailyLessonCap` — update it here
+whenever you change it in WaniKani.
+
+> The daily reset is assumed to be local midnight in `timezone`. That matches
+> observed behaviour, but WaniKani doesn't document it; if your counts drift,
+> a rolling 24-hour window is the likely alternative.
 
 ## Testing
 
