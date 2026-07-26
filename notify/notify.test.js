@@ -1,7 +1,7 @@
 // Tests for the do-not-disturb / time logic — the parts that decide whether
 // you get woken up, and that are otherwise only observable by waiting around
 // until 3am. Run with: node notify/notify.test.js
-import { inDndWindow, parseHHMM, localNow, startOfLocalDay, unannouncedReviews } from "./notify.js";
+import { inDndWindow, parseHHMM, localNow, startOfLocalDay, unannouncedReviews } from "./engine.js";
 
 let failures = 0;
 function check(name, actual, expected) {

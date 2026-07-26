@@ -2,7 +2,7 @@
   "timezone": "America/Los_Angeles",
   "dnd": {
     "start": "23:00",
-    "end": "10:30"
+    "end": "08:00"
   },
   "quietDays": [],
   "//notifyOnNewBatch": "Notify whenever new reviews become available, however few. This is the main trigger; reviewThreshold below is only the backstop nag for a pile you've already been told about.",
