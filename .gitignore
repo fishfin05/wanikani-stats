@@ -11,3 +11,7 @@ data/reviews.json
 data/meta.json
 
 .vercel
+
+# Notifier cooldown state (persisted via GitHub Actions cache, not git)
+.notify-state/
+.notify-topic.txt

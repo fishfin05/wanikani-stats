@@ -1,0 +1,64 @@
+name: WaniKani review notifier
+
+# Runs on a dumb fixed schedule; notify.js decides whether this particular run
+# should actually notify (DND window, quiet days, thresholds, cooldown). Cron
+# here is UTC-only and can't express "10pm your time" across DST, so the real
+# scheduling logic deliberately lives in the script instead.
+#
+# Note: GitHub disables scheduled workflows after 60 days with no repo activity,
+# and cron runs can be delayed under load — the cooldown logic tolerates both.
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Check and log, but don't send"
+        type: boolean
+        default: false
+      force:
+        description: "Ignore DND/cooldown/thresholds and send now (test)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: wk-notify
+  cancel-in-progress: false
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # Cooldown state has to survive between runs. Cache keys are immutable,
+      # so each run writes a new uniquely-keyed entry and restores the most
+      # recent one by prefix. If it's ever evicted the script treats it as
+      # "no history" and the worst case is one extra notification.
+      - name: Restore notifier state
+        uses: actions/cache/restore@v4
+        with:
+          path: .notify-state
+          key: notify-state-${{ github.run_id }}
+          restore-keys: notify-state-
+
+      - name: Check WaniKani and notify
+        env:
+          WANIKANI_API_KEY: ${{ secrets.WANIKANI_API_KEY }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: |
+          node notify/notify.js \
+            ${{ inputs.dry_run && '--dry-run' || '' }} \
+            ${{ inputs.force && '--force' || '' }}
+
+      - name: Save notifier state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .notify-state
+          key: notify-state-${{ github.run_id }}

@@ -1,0 +1,21 @@
+{
+  "timezone": "America/Los_Angeles",
+
+  "dnd": {
+    "start": "22:30",
+    "end": "08:00"
+  },
+
+  "quietDays": [],
+
+  "reviewThreshold": 10,
+  "lessonThreshold": 3,
+
+  "//dailyLessonCap": "WaniKani's 'Maximum Recommended Daily Lessons' is a web-app-only setting — it is NOT in the API, which always reports the full unlocked backlog (e.g. 53) instead of the 'Today's Lessons' number the dashboard shows. Set this to match your WaniKani setting so notifications agree with your dashboard; null = notify on the full backlog.",
+  "dailyLessonCap": 5,
+
+  "cooldownMinutes": 180,
+  "lessonCooldownMinutes": 1200,
+
+  "urgentReviewCount": 100
+}
