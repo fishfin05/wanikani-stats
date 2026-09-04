@@ -1,7 +1,14 @@
 // Tests for the do-not-disturb / time logic — the parts that decide whether
 // you get woken up, and that are otherwise only observable by waiting around
 // until 3am. Run with: node notify/notify.test.js
-import { inDndWindow, parseHHMM, localNow, startOfLocalDay, unannouncedReviews } from "./engine.js";
+import {
+  inDndWindow,
+  parseHHMM,
+  localNow,
+  startOfLocalDay,
+  unannouncedReviews,
+  runNotifier,
+} from "./engine.js";
 
 let failures = 0;
 function check(name, actual, expected) {
@@ -95,6 +102,57 @@ check("arrivals after a drop count",   pending({ announcedReviewCount: 8 }, 11),
 // Unknown state (first run, evicted cache, older format) must err toward telling
 // you about the queue rather than swallowing it.
 check("absent state announces queue",  pending({}, 5), 5);
+
+// ── commit-before-send ordering ────────────────────────────────────────────
+// The endpoint runs on a wall-clock budget and gets killed when it runs out.
+// Recording the notification after sending it meant a run cut short in between
+// left a delivered notification unrecorded, so the next run re-sent the same
+// batch — every minute until one finished in time. These pin the ordering that
+// turns that into a late notification instead of a loop.
+
+// One review available now, nothing announced yet: enough to fire the batch
+// trigger without any of the config's cooldowns being in play.
+const summaryResponse = {
+  data: {
+    reviews: [{ available_at: "2026-01-01T00:00:00.000Z", subject_ids: [1] }],
+    lessons: [],
+  },
+};
+
+async function runOrdered({ sendFails = false } = {}) {
+  const calls = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify(summaryResponse), { status: 200 });
+  try {
+    const outcome = await runNotifier({
+      apiKey: "k",
+      topic: "t",
+      config: { timezone: "UTC", dnd: null, dailyLessonCap: null },
+      state: { announcedReviewCount: 0 },
+      now: new Date("2026-01-01T12:00:00.000Z"),
+      persist: async (next) => {
+        calls.push("persist:" + next.announcedReviewCount);
+      },
+      send: async () => {
+        calls.push("send");
+        if (sendFails) throw new Error("ntfy unreachable");
+      },
+    }).catch((e) => ({ threw: e.message }));
+    return { calls, outcome };
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+}
+
+const delivered = await runOrdered();
+check("notification is committed before it is sent", delivered.calls[0], "persist:1");
+check("...and then sent",                            delivered.calls[1], "send");
+check("...writing exactly once",                     delivered.calls.length, 2);
+check("...and reported as sent",                     delivered.outcome.sent, true);
+
+const failed = await runOrdered({ sendFails: true });
+check("a failed send rolls the baseline back", failed.calls.at(-1), "persist:0");
+check("...and surfaces the error",             failed.outcome.threw, "ntfy unreachable");
 
 console.log(failures ? `\n${failures} test(s) failed` : "\nAll tests passed");
 process.exit(failures ? 1 : 0);

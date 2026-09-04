@@ -58,6 +58,17 @@ async function main() {
   if (!topic && !DRY_RUN) throw new Error("NTFY_TOPIC is not set");
 
   const before = loadState();
+
+  // Same funnel as the endpoint, so the engine can commit a notification before
+  // sending it and the quiet-run write below doesn't repeat one already made.
+  let persistedJson = JSON.stringify(before);
+  const persist = async (next) => {
+    const json = JSON.stringify(next);
+    if (DRY_RUN || json === persistedJson) return;
+    saveState(next);
+    persistedJson = json;
+  };
+
   const { state, notes, log } = await runNotifier({
     apiKey,
     topic,
@@ -66,13 +77,14 @@ async function main() {
     state: before,
     dryRun: DRY_RUN,
     force: FORCE,
+    persist,
   });
 
   for (const n of notes) console.log(`note: ${n}`);
   // Persist even on runs that stay quiet, so a baseline that followed the queue
   // down isn't re-raised by the next run. Skipped on dry runs so testing locally
   // can't consume a batch the real run should have announced.
-  if (!DRY_RUN && JSON.stringify(state) !== JSON.stringify(before)) saveState(state);
+  await persist(state);
   console.log(log);
 }
 

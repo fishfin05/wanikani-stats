@@ -17,17 +17,24 @@ import { runNotifier } from "../notify/engine.js";
 
 const STATE_BLOB = "wk-notify-state.json";
 
+// Blob is the one dependency that has to answer within the function's budget:
+// the notification is not sent until the write lands, so a stalled store means
+// a late notification rather than a repeated one.
+const BLOB_TIMEOUT_MS = 10000;
+
+// An absent blob and an unreadable one are deliberately not the same thing.
+// Absent is the normal first run: the engine reads it as "nothing announced
+// yet" and re-announces the queue rather than swallowing it, which is the safe
+// direction to fail in. A read that *errors* is not safe to treat that way —
+// while the failure lasted, every ping would see a fresh queue and announce it
+// again — so that propagates and the run makes no decision at all.
 async function loadState() {
-  try {
-    const result = await get(STATE_BLOB, { access: "private" });
-    if (result?.statusCode === 200 && result.stream) {
-      return await new Response(result.stream).json();
-    }
-  } catch (e) {
-    // A missing blob is the normal first-run case. The engine reads absent
-    // state as "nothing announced yet", so the queue gets re-announced rather
-    // than swallowed — the safe direction to fail in.
-    console.warn("Could not load notifier state:", e.message);
+  const result = await get(STATE_BLOB, {
+    access: "private",
+    abortSignal: AbortSignal.timeout(BLOB_TIMEOUT_MS),
+  });
+  if (result?.statusCode === 200 && result.stream) {
+    return await new Response(result.stream).json();
   }
   return null;
 }
@@ -57,6 +64,24 @@ export default async function handler(req, res) {
 
   try {
     const before = await loadState();
+
+    // Writes are funnelled through here so the engine can commit a notification
+    // before sending it, and so the quiet-run write at the end doesn't repeat
+    // one the engine already made. Identical writes are skipped: this runs
+    // ~1440 times a day and almost all of them decide nothing has changed.
+    let persistedJson = JSON.stringify(before);
+    const persist = async (next) => {
+      const json = JSON.stringify(next);
+      if (dryRun || json === persistedJson) return;
+      await put(STATE_BLOB, json, {
+        access: "private",
+        addRandomSuffix: false,
+        allowOverwrite: true,
+        abortSignal: AbortSignal.timeout(BLOB_TIMEOUT_MS),
+      });
+      persistedJson = json;
+    };
+
     const { state, sent, verdict, notes, log, summary, unannounced, lessonsToday } =
       await runNotifier({
         apiKey,
@@ -68,23 +93,16 @@ export default async function handler(req, res) {
         state: before,
         dryRun,
         force,
+        persist,
       });
 
     for (const n of notes) console.log(`note: ${n}`);
     console.log(log);
 
     // Persist even when staying quiet, so a baseline that followed a shrinking
-    // queue down isn't re-raised by the next ping. Skipping identical writes
-    // matters here: this runs ~1440 times a day and almost all of them decide
-    // nothing has changed.
-    const changed = JSON.stringify(state) !== JSON.stringify(before);
-    if (!dryRun && changed) {
-      await put(STATE_BLOB, JSON.stringify(state), {
-        access: "private",
-        addRandomSuffix: false,
-        allowOverwrite: true,
-      });
-    }
+    // queue down isn't re-raised by the next ping. A run that notified has
+    // already written through persist(), so this is a no-op there.
+    await persist(state);
 
     res.status(200).json({
       ok: true,

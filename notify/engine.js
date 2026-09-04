@@ -12,6 +12,14 @@ const WK_REVISION = "20170710";
 const WK_DASHBOARD = "https://www.wanikani.com/dashboard";
 const DEFAULT_NTFY_SERVER = "https://ntfy.sh";
 
+// Nothing in here may hang. The endpoint front end runs on a wall-clock budget
+// and is killed when it runs out, which is how a notification that was already
+// delivered ends up with no record that it was — see the persist comment in
+// runNotifier. A stalled socket must fail fast enough to leave room for the
+// rest of the run rather than eating the whole budget.
+const FETCH_TIMEOUT_MS = 8000;
+const abortAfter = (ms = FETCH_TIMEOUT_MS) => AbortSignal.timeout(ms);
+
 // Only mention the next review batch if it's near enough to be worth acting
 // on — "next batch in 9 hours" is just noise.
 const NEXT_BATCH_HORIZON_MINUTES = 12 * 60;
@@ -138,6 +146,7 @@ export function unannouncedReviews(state, reviews) {
 async function wkFetch(path, apiKey) {
   const res = await fetch(`${WK_API}${path}`, {
     headers: { Authorization: `Bearer ${apiKey}`, "Wanikani-Revision": WK_REVISION },
+    signal: abortAfter(),
   });
   if (!res.ok) throw new Error(`WaniKani API ${res.status}: ${await res.text()}`);
   return res.json();
@@ -196,6 +205,7 @@ export async function sendNtfy({ topic, server, title, message, priority, tags }
       Click: WK_DASHBOARD,
     },
     body: message,
+    signal: abortAfter(),
   });
   if (!res.ok) throw new Error(`ntfy ${res.status}: ${await res.text()}`);
 }
@@ -226,6 +236,7 @@ export async function runNotifier({
   force = false,
   now = new Date(),
   send = sendNtfy,
+  persist = async () => {},
 }) {
   const cfg = normalizeConfig(config);
   const state = normalizeState(rawState);
@@ -387,8 +398,16 @@ export async function runNotifier({
     return result(`WOULD SEND (${kind}): ${payload.title} — ${payload.message.replace(/\n/g, " ")}`);
   }
 
-  await send({ topic, server, ...payload });
-
+  // Record the notification *before* sending it.
+  //
+  // Everywhere else this file errs toward a redundant notification over a
+  // swallowed one, because being wrong costs one extra buzz. That trade doesn't
+  // hold here. The caller runs on a wall-clock budget, and if the run is killed
+  // between the send and the write, the next run sees the same unannounced
+  // batch and sends again — once a minute, indefinitely, until some run happens
+  // to finish in time. Unbounded repetition is worse than a missed batch, so
+  // this one step commits first and treats the send as the part to undo.
+  const prior = { ...state };
   const sentAt = now.toISOString();
   if (kind === "batch") state.lastBatchNotifyAt = sentAt;
   else if (kind === "review") state.lastReviewNotifyAt = sentAt;
@@ -396,6 +415,20 @@ export async function runNotifier({
   // Both review notifications report the current queue, so the whole thing has
   // now been announced either way.
   if (kind !== "lesson") state.announcedReviewCount = summary.reviews;
+
+  await persist(state);
+
+  try {
+    await send({ topic, server, ...payload });
+  } catch (e) {
+    // Nothing was announced after all, so put the baseline back and let the
+    // next run retry this batch instead of counting it as delivered. The
+    // rollback is best-effort: if it fails too, the batch is merely late,
+    // because the backstop nag still fires on the pile that's left.
+    Object.assign(state, prior);
+    await persist(state).catch(() => {});
+    throw e;
+  }
 
   return result(`SENT (${kind}): ${payload.title}`, true);
 }

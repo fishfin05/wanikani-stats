@@ -45,7 +45,9 @@ Everything lives in [`config.json`](./config.json):
 
 WaniKani releases reviews in batches on the SRS clock, so the thing worth being
 told about is the *arrival*, not the total sitting there. Each run compares the
-available review count against the previous run's and notifies when it went up.
+available review count against the count as of the last *notification* — not
+against the previous run — so a dropped ping makes a notification late rather
+than losing the batch entirely.
 
 Three triggers, in priority order:
 
@@ -121,6 +123,13 @@ This started on a GitHub Actions cron and moved off it. GitHub treats schedules
 as best-effort and was firing roughly one run in six, which turned "tell me when
 a batch lands" into "tell me within a couple of hours". Vercel's own cron is
 once-a-day on Hobby, hence the outside pinger.
+
+Each notification is written to state *before* it is sent, and the write is
+rolled back if the send then fails. The endpoint runs on a wall-clock budget and
+is killed when it runs out; recording afterwards meant a run cut short between
+the two left a delivered notification with no record of it, so the next ping saw
+the same batch and sent it again — every minute until some run finished in time.
+Committing first turns that failure into a late notification instead of a loop.
 
 State lives in a private Blob (`wk-notify-state.json`) and only records
 cooldowns plus the review count as of the last notification. Nothing depends on
