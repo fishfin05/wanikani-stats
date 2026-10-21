@@ -15,6 +15,9 @@
       "includeFiles": "data/**",
       "maxDuration": 60
     },
+    "api/custom-study.js": {
+      "maxDuration": 10
+    },
     "api/notify.js": {
       "includeFiles": "notify/**",
       "maxDuration": 60
