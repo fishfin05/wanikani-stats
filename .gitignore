@@ -15,3 +15,6 @@ data/meta.json
 # Notifier cooldown state (persisted via GitHub Actions cache, not git)
 .notify-state/
 .notify-topic.txt
+
+# Local before/after screenshots (not part of the app)
+screenshots-*/

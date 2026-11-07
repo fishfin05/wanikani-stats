@@ -4,6 +4,9 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>WaniKani Stats</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&display=swap">
   <link rel="stylesheet" href="style.css">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 </head>
@@ -12,7 +15,8 @@
     <div class="header-inner">
       <h1>WaniKani Stats</h1>
       <nav class="tabs">
-        <button class="tab active" data-tab="reviews">Reviews</button>
+        <button class="tab active" data-tab="overview">Overview</button>
+        <button class="tab" data-tab="reviews">Reviews</button>
         <button class="tab" data-tab="analytics">Analytics</button>
         <button class="tab" data-tab="items">Items</button>
         <button class="tab" data-tab="insights">Insights</button>
@@ -22,6 +26,7 @@
         <span class="settings-icon">↻</span> Sync
       </button>
       <span id="sync-now-status" class="sync-now-status"></span>
+      <span id="app-version" class="app-version" title="Dashboard version"></span>
       <button id="settings-btn" class="settings-btn" type="button" title="WaniKani API key">
         <span class="settings-icon">⚙</span> API Key
       </button>
@@ -58,7 +63,63 @@
   <main>
 
     <!-- ══ REVIEWS TAB ══ -->
-    <section id="reviews-tab" class="tab-content active">
+    <section id="overview-tab" class="tab-content active">
+      <div class="ov-wrap">
+        <div class="ov-head">
+          <div class="ov-eyebrow" id="ov-eyebrow">WaniKani</div>
+          <h2 class="ov-title">Overview</h2>
+        </div>
+
+        <div class="ov-tiles" id="ov-tiles"></div>
+
+        <div class="ov-card">
+          <div class="ov-card-head">
+            <div>
+              <h3>Study time</h3>
+              <p class="ov-desc">Worked out from the time of each answer saved by Custom Study (English → Japanese, Audio → English). Breaks over 2 minutes don't count. WaniKani's own reviews can't be timed: WaniKani doesn't share review times.</p>
+            </div>
+            <div class="ov-seg" id="ov-time-group">
+              <button type="button" data-value="day" class="active">Days</button>
+              <button type="button" data-value="week">Weeks</button>
+              <button type="button" data-value="month">Months</button>
+            </div>
+          </div>
+          <p class="ov-msg" id="ov-time-msg" hidden></p>
+          <div class="ov-chart" id="ov-time-chart" hidden><canvas id="ovTimeChart"></canvas></div>
+          <div class="ov-key"><span><i style="background:#2563eb"></i>Minutes</span><span><i class="dash"></i>Running total (hours)</span></div>
+        </div>
+
+        <div class="ov-card">
+          <h3>Progress by direction</h3>
+          <p class="ov-desc">Each direction keeps its own progress. A word opens up for the extra directions once it reaches Guru in WaniKani.</p>
+          <div id="ov-directions"></div>
+          <div class="ov-key" id="ov-srs-legend"></div>
+        </div>
+
+        <div class="ov-card">
+          <h3>Where you're headed</h3>
+          <div class="ov-tiles ov-tiles--3" id="ov-headed"></div>
+          <h4 class="ov-subhead">JLPT kanji at Guru or higher</h4>
+          <div class="ov-rings" id="ov-jlpt"></div>
+        </div>
+
+        <div class="ov-card">
+          <div class="ov-card-head">
+            <div>
+              <h3>Kanji grid</h3>
+              <p class="ov-desc" id="ov-kanji-note"></p>
+            </div>
+            <div class="ov-seg" id="ov-kanji-group">
+              <button type="button" data-value="level" class="active">By level</button>
+              <button type="button" data-value="jlpt">By JLPT</button>
+            </div>
+          </div>
+          <div id="ov-kanji" class="ov-kanji"></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="reviews-tab" class="tab-content">
       <div class="toolbar">
         <label class="ctrl-label">
           Group by

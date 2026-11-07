@@ -1,6 +1,6 @@
 {
   "name": "wanikani-stats",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "type": "module",
   "engines": {
     "node": ">=20"
@@ -8,7 +8,9 @@
   "scripts": {
     "sync": "node sync.js",
     "start": "node server.js",
-    "dev": "node server.js"
+    "dev": "node server.js",
+    "version:write": "node scripts/write-version.mjs",
+    "test": "node api/_custom-study-merge.test.mjs && node api/_custom-study.handler.test.mjs && node api/_study-summary.test.mjs && node tests/overview.test.mjs"
   },
   "dependencies": {
     "@vercel/blob": "^2.5.0",

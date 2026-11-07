@@ -1,3 +1,9 @@
+import { setupOverview } from "./overview.js";
+
+// Skill Tracker look: Geist font, soft grey chart text.
+Chart.defaults.font.family = "Geist, system-ui, -apple-system, sans-serif";
+Chart.defaults.color = "#a3a3a3";
+
 // ── global state ────────────────────────────────────────────────────────────
 let rawData = { items: [], levelProgressions: [], jlptTotals: {}, currentLevel: 0, activity: { dailyCounts: {}, currentStreak: 0, longestStreak: 0, totalReviews: 0 } };
 const charts = {};
@@ -160,7 +166,7 @@ function makeHatchPattern(color) {
   const ctx = c.getContext("2d");
   ctx.fillStyle = color;
   ctx.fillRect(0, 0, 8, 8);
-  ctx.strokeStyle = "#7a80a0";
+  ctx.strokeStyle = "#a3a3a3";
   ctx.lineWidth = 1.5;
   ctx.beginPath();
   ctx.moveTo(0, 8); ctx.lineTo(8, 0);
@@ -173,10 +179,10 @@ function makeHatchPattern(color) {
 }
 
 const BASE_SCALES = {
-  x: { ticks: { color: "#7a80a0", font: { size: 11 } }, grid: { color: "#2d3146" } },
-  y: { ticks: { color: "#7a80a0", font: { size: 11 } }, grid: { color: "#2d3146" } },
+  x: { ticks: { color: "#a3a3a3", font: { size: 11 } }, grid: { color: "rgba(255,255,255,0.06)" } },
+  y: { ticks: { color: "#a3a3a3", font: { size: 11 } }, grid: { color: "rgba(255,255,255,0.06)" } },
 };
-const BASE_LEGEND = { labels: { color: "#7a80a0", boxWidth: 12, font: { size: 11 } } };
+const BASE_LEGEND = { labels: { color: "#a3a3a3", boxWidth: 12, font: { size: 11 } } };
 
 const PALETTE = [
   "#e86228","#e8a228","#c8e828","#28e86e","#28c4e8",
@@ -238,7 +244,15 @@ function getFiltered(tabKey) {
 }
 
 // ── init ─────────────────────────────────────────────────────────────────────
+async function showVersion() {
+  try {
+    const { version } = await (await fetch("/version.json", { cache: "no-store" })).json();
+    document.getElementById("app-version").textContent = `v${version}`;
+  } catch { /* version label is optional */ }
+}
+
 async function init() {
+  showVersion();
   showLoading("Loading data…");
   try {
     const res = await fetch("/api/data");
@@ -269,6 +283,11 @@ async function init() {
   setupSettings();
   setupSyncNowButton();
   setupReviewsTab();
+  setupOverview({
+    rawData, charts, SRS_COLORS, srsLabel, median, getCurrentLevelInfo, simulateCurrentLevelUpDate,
+    getPace: () => defaultPaceDays,
+    apiKey: () => localStorage.getItem(WK_API_KEY_STORAGE),
+  });
   setupAnalyticsTab();
   setupItemsTab();
   setupInsightsTab();
@@ -681,7 +700,7 @@ function buildGuruChart() {
       plugins: { legend: BASE_LEGEND, tooltip: { mode: "index" } },
       scales: {
         x: { ...BASE_SCALES.x, stacked: true, ticks: { ...BASE_SCALES.x.ticks, maxRotation: 45 } },
-        y: { ...BASE_SCALES.y, stacked: true, title: { display: true, text: yLabel, color: "#7a80a0" } },
+        y: { ...BASE_SCALES.y, stacked: true, title: { display: true, text: yLabel, color: "#a3a3a3" } },
       },
     },
   });
@@ -706,7 +725,7 @@ function buildLevelDurationChart() {
         label: "Days",
         data: durFixed,
         backgroundColor: durFixed.map((d, i) =>
-          !lps[i].passed_at ? "#2d3146" : d <= 7 ? "#28e86e88" : d <= 14 ? "#e8a22888" : "#e8282888"),
+          !lps[i].passed_at ? "#2a2a2a" : d <= 7 ? "#28e86e88" : d <= 14 ? "#e8a22888" : "#e8282888"),
         borderColor: durFixed.map((d, i) =>
           !lps[i].passed_at ? "#4a5180" : d <= 7 ? "#28e86e" : d <= 14 ? "#e8a228" : "#e82828"),
         borderWidth: 1,
@@ -720,7 +739,7 @@ function buildLevelDurationChart() {
       },
       scales: {
         x: { ...BASE_SCALES.x },
-        y: { ...BASE_SCALES.y, title: { display: true, text: "Days", color: "#7a80a0" } },
+        y: { ...BASE_SCALES.y, title: { display: true, text: "Days", color: "#a3a3a3" } },
       },
     },
   });
@@ -791,7 +810,7 @@ function buildLevelProjectionChart() {
     },
     {
       label: "If you stopped", data: zeroPoints,
-      borderColor: "#7a80a0", backgroundColor: "transparent",
+      borderColor: "#a3a3a3", backgroundColor: "transparent",
       borderWidth: 1.5, borderDash: [6, 4], pointRadius: 0, tension: 0,
     },
   ].filter(Boolean);
@@ -815,12 +834,12 @@ function buildLevelProjectionChart() {
       scales: {
         x: {
           ...BASE_SCALES.x, type: "linear", min: 0, max: horizonEnd,
-          title: { display: true, text: "Time from now", color: "#7a80a0" },
+          title: { display: true, text: "Time from now", color: "#a3a3a3" },
           ticks: { ...BASE_SCALES.x.ticks, callback: dateTick },
         },
         y: {
           ...BASE_SCALES.y, min: Math.max(1, currentLevel - 2), max: 60,
-          title: { display: true, text: "WK Level", color: "#7a80a0" },
+          title: { display: true, text: "WK Level", color: "#a3a3a3" },
         },
       },
     },
@@ -890,7 +909,7 @@ function buildReviewsForecast(horizonDays = 60) {
       },
       scales: {
         x: { ...BASE_SCALES.x, stacked: true, ticks: { ...BASE_SCALES.x.ticks, maxRotation: 90, autoSkip: true, maxTicksLimit: 20 } },
-        y: { ...BASE_SCALES.y, stacked: true, title: { display: true, text: "Reviews due", color: "#7a80a0" } },
+        y: { ...BASE_SCALES.y, stacked: true, title: { display: true, text: "Reviews due", color: "#a3a3a3" } },
       },
     },
   });
@@ -996,7 +1015,7 @@ function buildJlptProficiency(items) {
   });
 
   // Proficiency estimate: highest level with ≥85% Guru+ of all kanji at that level
-  let estimateText = "Beginner", estimateSub = "Keep studying!", estimateColor = "#7a80a0";
+  let estimateText = "Beginner", estimateSub = "Keep studying!", estimateColor = "#a3a3a3";
   for (let i = JLPT_LEVELS.length - 1; i >= 0; i--) {
     const s = stats[i];
     if (!s.total) continue;
@@ -1105,7 +1124,7 @@ function buildJlptProficiency(items) {
         },
       },
       scales: {
-        x: { ...BASE_SCALES.x, stacked: true, title: { display: true, text: "Kanji count", color: "#7a80a0" } },
+        x: { ...BASE_SCALES.x, stacked: true, title: { display: true, text: "Kanji count", color: "#a3a3a3" } },
         y: { ...BASE_SCALES.y, stacked: true, ticks: { color: "#e0e4f0", font: { size: 13, weight: "600" } } },
       },
     },
@@ -1135,7 +1154,7 @@ function buildVocabProficiency(items) {
     return { lvl, total, wkTeaches, byStage, guruPlus, burned, pct, pctOfWk };
   });
 
-  let estimateText = "Beginner", estimateSub = "Keep studying!", estimateColor = "#7a80a0";
+  let estimateText = "Beginner", estimateSub = "Keep studying!", estimateColor = "#a3a3a3";
   for (let i = JLPT_LEVELS.length - 1; i >= 0; i--) {
     const s = stats[i];
     if (!s.total) continue;
@@ -1239,7 +1258,7 @@ function buildVocabProficiency(items) {
         },
       },
       scales: {
-        x: { ...BASE_SCALES.x, stacked: true, title: { display: true, text: "Vocabulary count", color: "#7a80a0" } },
+        x: { ...BASE_SCALES.x, stacked: true, title: { display: true, text: "Vocabulary count", color: "#a3a3a3" } },
         y: { ...BASE_SCALES.y, stacked: true, ticks: { color: "#e0e4f0", font: { size: 13, weight: "600" } } },
       },
     },
@@ -1437,7 +1456,7 @@ function buildSrsDonut(items) {
     options: {
       responsive: true, maintainAspectRatio: false, cutout: "62%",
       plugins: {
-        legend: { position: "right", labels: { color: "#7a80a0", boxWidth: 12, font: { size: 11 }, padding: 14 } },
+        legend: { position: "right", labels: { color: "#a3a3a3", boxWidth: 12, font: { size: 11 }, padding: 14 } },
         tooltip: {
           callbacks: {
             label: (ctx) => ` ${ctx.label}: ${ctx.raw}  (${items.length ? Math.round(ctx.raw / items.length * 100) : 0}%)`,
@@ -1469,7 +1488,7 @@ function buildItemsByLevel(items) {
       plugins: { legend: BASE_LEGEND, tooltip: { mode: "index" } },
       scales: {
         x: { ...BASE_SCALES.x, stacked: true, ticks: { ...BASE_SCALES.x.ticks, maxRotation: 0 } },
-        y: { ...BASE_SCALES.y, stacked: true, title: { display: true, text: "Items", color: "#7a80a0" } },
+        y: { ...BASE_SCALES.y, stacked: true, title: { display: true, text: "Items", color: "#a3a3a3" } },
       },
     },
   });
@@ -1506,7 +1525,7 @@ function buildAccuracyByLevel(items) {
       plugins: { legend: BASE_LEGEND },
       scales: {
         x: { ...BASE_SCALES.x, ticks: { ...BASE_SCALES.x.ticks, maxRotation: 45 } },
-        y: { ...BASE_SCALES.y, min: 50, max: 100, title: { display: true, text: "Accuracy %", color: "#7a80a0" }, ticks: { ...BASE_SCALES.y.ticks, callback: (v) => v + "%" } },
+        y: { ...BASE_SCALES.y, min: 50, max: 100, title: { display: true, text: "Accuracy %", color: "#a3a3a3" }, ticks: { ...BASE_SCALES.y.ticks, callback: (v) => v + "%" } },
       },
     },
   });
@@ -1553,8 +1572,8 @@ function buildAccuracyByType(items) {
         },
       },
       scales: {
-        x: { ...BASE_SCALES.x, ticks: { color: "#7a80a0", font: { size: 12 } } },
-        y: { ...BASE_SCALES.y, min: 0, max: 100, title: { display: true, text: "Accuracy %", color: "#7a80a0" }, ticks: { ...BASE_SCALES.y.ticks, callback: (v) => v + "%" } },
+        x: { ...BASE_SCALES.x, ticks: { color: "#a3a3a3", font: { size: 12 } } },
+        y: { ...BASE_SCALES.y, min: 0, max: 100, title: { display: true, text: "Accuracy %", color: "#a3a3a3" }, ticks: { ...BASE_SCALES.y.ticks, callback: (v) => v + "%" } },
       },
     },
   });
