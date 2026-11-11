@@ -113,7 +113,7 @@ endpoint already sent.
 
 ## How the scheduling works
 
-`/api/notify` is stateless per request and does nothing unless it decides to,
+`/api/notify` revalidates its committed state on each request and does nothing unless it decides to,
 so the schedule is just something calling it constantly. That job belongs to an
 external pinger ([cron-job.org](https://cron-job.org)) hitting it every minute
 with `Authorization: Bearer $CRON_SECRET`. One minute is therefore the
@@ -149,3 +149,64 @@ ping makes a notification late rather than losing it.
 Env vars are baked in at deploy time, so changing one needs a redeploy before
 it takes effect. Same for `config.json` — the endpoint reads it from the
 deployed bundle, so edits are only live once pushed.
+
+## Blob cost and failure handling (1.1.1)
+
+The installed SDK is @vercel/blob 2.5.0 (package-lock.json). Its GET uses a
+single authenticated download; it does not call HEAD or LIST. The SDK normally
+retries some PUT failures ten times; this endpoint sets VERCEL_BLOB_RETRIES=0
+in its own function process. No environment files are edited.
+
+State is compared by the four fields the engine actually uses, independent of
+JSON field order or obsolete fields. Unchanged state costs zero advanced
+operations. Each actual state change costs one PUT. A notification is committed
+before sending and the final save is skipped. A failed push can cost a second
+PUT to roll back. Concurrent writes use the ETag from GET, with no conflict
+retry. A warm instance caches only committed JSON and revalidates its ETag on
+every ping, so another instance's notification is not hidden by a stale cache.
+
+Storage failures return HTTP 200 with ok:false, sent:false, status:
+storage_unavailable and retryAfterSeconds:60. A warm instance skips storage
+attempts during that interval (storage_backoff). Other run failures return
+run_failed. Each failure logs one fixed line, never the raw error or credentials.
+Unauthorized calls still return 401. HTTP 200 means the scheduler reached the
+function; inspect ok/status to determine whether the notifier ran successfully.
+
+For a public, entirely read-only deployment check, GET /api/notify?health=1
+returns ready without reading Blob, contacting WaniKani, or sending a push. It
+checks endpoint availability only. For an authenticated decision check, use
+dry=1; this reads state but never persists or sends.
+
+### Operation accounting and the 300/month constraint
+
+Run npm test (includes engine, mocked handler, and real SDK transport tests).
+The handler's 1,440-ping simulations report:
+
+| Day | GET | PUT (advanced) | LIST / HEAD |
+| --- | ---: | ---: | ---: |
+| Unchanged queue | 1,440 | 0 | 0 / 0 |
+| Four batches, study 20 items minute by minute after each | 1,440 | 84 | 0 / 0 |
+
+Formula: daily advanced operations = notifications + observed queue decreases
++ successful rollback writes. Cold starts do not themselves cause writes.
+With four notices and four queue decreases/day: 8/day, 240/30 days. With the
+minute-by-minute study fixture: 84/day, 2,520/30 days. These are examples, not a
+forecast of the user's actual activity. GET is a simple operation on a cache
+miss; 1,440 GET/day would be 43,200 simple operations/month if all missed cache.
+ETag 304 responses reduce downloaded bytes, not a guaranteed billed operation
+count. Server cache hits and cold starts affect actual simple-operation usage.
+
+A guaranteed total below 300 advanced operations/month cannot be obtained with
+Blob alone while keeping exact notification behavior: every observed queue
+decrease must survive a function restart or the next new batch can be missed.
+An in-memory-only baseline or delayed writes would change that behavior. A
+durable database is needed to remove this limitation without changing notices.
+The previous handler already skipped identical JSON writes, so no honest
+50-215/day to <10/day reduction can be claimed from this patch alone.
+
+The supplied store-wide 1,434 advanced operations are not all attributable to
+this notifier: api/data.js and api/sync.js also LIST, and custom-study writes
+backups. Those paths and all WaniKani data are unchanged in this patch.
+
+Billing definitions: https://vercel.com/docs/vercel-blob/usage-and-pricing
+SDK reference: https://vercel.com/docs/vercel-blob/using-blob-sdk

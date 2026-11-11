@@ -1,121 +1,134 @@
-// The live review notifier, pinged from outside every minute.
-//
-// This exists because GitHub Actions' scheduler was dropping roughly five of
-// every six runs, which turned "tell me when a batch lands" into "tell me
-// sometime in the next couple of hours". Vercel's own cron is once-a-day on
-// Hobby, so the schedule comes from an external pinger (cron-job.org) hitting
-// this endpoint; all it needs to do is be cheap and idempotent enough to call
-// constantly.
-//
-// Env: WANIKANI_API_KEY, NTFY_TOPIC, CRON_SECRET (all required),
-//      NTFY_SERVER (optional, defaults to https://ntfy.sh)
-
+// Pinged every minute by cron-job.org. Notification decisions live in engine.js.
 import { put, get } from "@vercel/blob";
-import { readFileSync } from "fs";
-import { join } from "path";
-import { runNotifier } from "../notify/engine.js";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { runNotifier, normalizeState } from "../notify/engine.js";
+
+// SDK 2.5.0 otherwise retries transient PUT failures up to ten times. This
+// setting is local to this function's process; no environment file is changed.
+process.env.VERCEL_BLOB_RETRIES = "0";
 
 const STATE_BLOB = "wk-notify-state.json";
-
-// Blob is the one dependency that has to answer within the function's budget:
-// the notification is not sent until the write lands, so a stalled store means
-// a late notification rather than a repeated one.
 const BLOB_TIMEOUT_MS = 10000;
+const RETRY_AFTER_MS = 60000;
+const stateJson = (state) => JSON.stringify(normalizeState(state));
 
-// An absent blob and an unreadable one are deliberately not the same thing.
-// Absent is the normal first run: the engine reads it as "nothing announced
-// yet" and re-announces the queue rather than swallowing it, which is the safe
-// direction to fail in. A read that *errors* is not safe to treat that way —
-// while the failure lasted, every ping would see a fresh queue and announce it
-// again — so that propagates and the run makes no decision at all.
-async function loadState() {
-  const result = await get(STATE_BLOB, {
-    access: "private",
-    abortSignal: AbortSignal.timeout(BLOB_TIMEOUT_MS),
-  });
-  if (result?.statusCode === 200 && result.stream) {
-    return await new Response(result.stream).json();
-  }
-  return null;
-}
+export function createHandler({
+  blobGet = get,
+  blobPut = put,
+  run = runNotifier,
+  env = process.env,
+  clock = Date.now,
+  logger = console,
+  readConfig = () => JSON.parse(readFileSync(join(process.cwd(), "notify", "config.json"), "utf8")),
+} = {}) {
+  // Cache only committed state. Revalidate its ETag with GET on every ping:
+  // another Vercel instance may have sent a notification since our last run.
+  let cached = null;
+  let retryAt = 0;
+  let busy = false;
 
-export default async function handler(req, res) {
-  // The pinger is a public URL being hit every minute, so the secret is the
-  // only thing standing between a stranger and the ability to spam the phone.
-  const secret = process.env.CRON_SECRET;
-  if (!secret) return res.status(500).json({ error: "CRON_SECRET not configured" });
-  const supplied =
-    req.headers.authorization?.replace(/^Bearer /, "") ?? req.query?.key ?? null;
-  if (supplied !== secret) return res.status(401).json({ error: "Unauthorized" });
+  return async function handler(req, res) {
+    res.setHeader("Cache-Control", "no-store");
+    const soft = (status, extra = {}) => res.status(200).json({
+      ok: false, sent: false, status, ...extra,
+    });
+    // Public deployment check: never reads state or contacts WaniKani/ntfy.
+    if (req.method === "GET" && req.query?.health === "1") {
+      return res.status(200).json({ ok: true, status: "ready", mode: "health" });
+    }
+    const secret = env.CRON_SECRET;
+    if (!secret) return soft("configuration_error", { error: "CRON_SECRET not configured" });
+    const supplied = req.headers.authorization?.replace(/^Bearer /, "") ?? req.query?.key ?? null;
+    if (supplied !== secret) return res.status(401).json({ error: "Unauthorized" });
 
-  const sanitize = (v) => v?.replace(/^﻿/, "").trim() || null;
-  const apiKey = sanitize(process.env.WANIKANI_API_KEY);
-  const topic = sanitize(process.env.NTFY_TOPIC);
-  if (!apiKey) return res.status(500).json({ error: "WANIKANI_API_KEY not configured" });
-  if (!topic) return res.status(500).json({ error: "NTFY_TOPIC not configured" });
-  if (!process.env.BLOB_READ_WRITE_TOKEN) {
-    return res.status(503).json({ error: "Vercel Blob storage not configured" });
-  }
+    const sanitize = (v) => v?.replace(/^\uFEFF/, "").trim() || null;
+    const apiKey = sanitize(env.WANIKANI_API_KEY);
+    const topic = sanitize(env.NTFY_TOPIC);
+    if (!apiKey || !topic || !env.BLOB_READ_WRITE_TOKEN) {
+      logger.error("notify status=configuration_error");
+      return soft("configuration_error", { error: "Required notifier configuration is missing" });
+    }
+    if (clock() < retryAt) return soft("storage_backoff", {
+      retryAfterSeconds: Math.ceil((retryAt - clock()) / 1000),
+    });
+    if (busy) return soft("busy");
 
-  // Query flags mirror the CLI's, for testing the live endpoint without
-  // actually buzzing the phone or waiting out a cooldown.
-  const dryRun = req.query?.dry === "1";
-  const force = req.query?.force === "1";
-
-  try {
-    const before = await loadState();
-
-    // Writes are funnelled through here so the engine can commit a notification
-    // before sending it, and so the quiet-run write at the end doesn't repeat
-    // one the engine already made. Identical writes are skipped: this runs
-    // ~1440 times a day and almost all of them decide nothing has changed.
-    let persistedJson = JSON.stringify(before);
-    const persist = async (next) => {
-      const json = JSON.stringify(next);
-      if (dryRun || json === persistedJson) return;
-      await put(STATE_BLOB, json, {
+    const dryRun = req.query?.dry === "1";
+    const force = req.query?.force === "1";
+    let storageOperation = false;
+    busy = true;
+    try {
+      storageOperation = true;
+      const loaded = await blobGet(STATE_BLOB, {
         access: "private",
-        addRandomSuffix: false,
-        allowOverwrite: true,
+        ...(cached?.etag ? { ifNoneMatch: cached.etag } : {}),
         abortSignal: AbortSignal.timeout(BLOB_TIMEOUT_MS),
       });
-      persistedJson = json;
-    };
+      let before;
+      let etag;
+      if (loaded?.statusCode === 304 && cached) {
+        before = JSON.parse(cached.json);
+        etag = cached.etag;
+      } else if (loaded?.statusCode === 200 && loaded.stream) {
+        before = await new Response(loaded.stream).json();
+        etag = loaded.blob?.etag;
+        cached = { json: stateJson(before), etag };
+      } else if (loaded === null) {
+        before = null;
+        cached = null;
+      } else {
+        throw new Error("Unexpected Blob response");
+      }
+      storageOperation = false;
 
-    const { state, sent, verdict, notes, log, summary, unannounced, lessonsToday } =
-      await runNotifier({
-        apiKey,
-        topic,
-        server: sanitize(process.env.NTFY_SERVER),
-        config: JSON.parse(
-          readFileSync(join(process.cwd(), "notify", "config.json"), "utf8")
-        ),
-        state: before,
-        dryRun,
-        force,
-        persist,
+      let persistedJson = stateJson(before);
+      const persist = async (next) => {
+        const json = stateJson(next);
+        if (dryRun || json === persistedJson) return;
+        storageOperation = true;
+        const written = await blobPut(STATE_BLOB, json, {
+          access: "private",
+          addRandomSuffix: false,
+          // Never overwrite a concurrent notification; a conflict is a soft
+          // failure, with no retry. GET already supplied the ETag; no HEAD.
+          allowOverwrite: before !== null,
+          ...(etag ? { ifMatch: etag } : {}),
+          abortSignal: AbortSignal.timeout(BLOB_TIMEOUT_MS),
+        });
+        persistedJson = json;
+        before = JSON.parse(json);
+        etag = written?.etag;
+        cached = { json, etag };
+        storageOperation = false;
+      };
+
+      const { state, sent, verdict, notes, log, summary, unannounced, lessonsToday } = await run({
+        apiKey, topic, server: sanitize(env.NTFY_SERVER), config: readConfig(),
+        state: before, dryRun, force, persist,
       });
-
-    for (const n of notes) console.log(`note: ${n}`);
-    console.log(log);
-
-    // Persist even when staying quiet, so a baseline that followed a shrinking
-    // queue down isn't re-raised by the next ping. A run that notified has
-    // already written through persist(), so this is a no-op there.
-    await persist(state);
-
-    res.status(200).json({
-      ok: true,
-      sent,
-      verdict,
-      reviews: summary.reviews,
-      unannounced,
-      lessonsToday,
-      nextReviewAt: summary.nextReviewAt,
-      notes,
-    });
-  } catch (e) {
-    console.error("Notify error:", e);
-    res.status(500).json({ error: e.message });
-  }
+      // The engine commits before sending. This only writes a quiet run when
+      // its baseline actually fell; the post-send call is an identical no-op.
+      await persist(state);
+      for (const note of notes) logger.log(`note: ${note}`);
+      logger.log(log);
+      return res.status(200).json({
+        ok: true, sent, verdict, reviews: summary.reviews, unannounced,
+        lessonsToday, nextReviewAt: summary.nextReviewAt, notes,
+      });
+    } catch {
+      // Do not log raw SDK/fetch errors: they can include credential URLs.
+      const status = storageOperation ? "storage_unavailable" : "run_failed";
+      if (storageOperation) {
+        cached = null;
+        retryAt = clock() + RETRY_AFTER_MS;
+      }
+      logger.error(`notify status=${status}`);
+      return soft(status, storageOperation ? { retryAfterSeconds: RETRY_AFTER_MS / 1000 } : {});
+    } finally {
+      busy = false;
+    }
+  };
 }
+
+export default createHandler();
