@@ -150,63 +150,88 @@ Env vars are baked in at deploy time, so changing one needs a redeploy before
 it takes effect. Same for `config.json` — the endpoint reads it from the
 deployed bundle, so edits are only live once pushed.
 
-## Blob cost and failure handling (1.1.1)
+## Blob coalescing and failures (1.1.2)
 
-The installed SDK is @vercel/blob 2.5.0 (package-lock.json). Its GET uses a
-single authenticated download; it does not call HEAD or LIST. The SDK normally
-retries some PUT failures ten times; this endpoint sets VERCEL_BLOB_RETRIES=0
-in its own function process. No environment files are edited.
+The warm process keeps the live decision state in memory between pings. Quiet
+queue decreases update that state immediately, so the next batch is measured
+against the current baseline even when it has not been uploaded to Blob yet.
+Notification stamps and notification commits still save immediately, before
+sending, with the existing rollback on a failed push. Other changed state is
+checkpointed only when at least 30 minutes have passed since the last successful
+save. A notification also resets that checkpoint clock. Identical state never
+writes, including at the end of a notification run.
 
-State is compared by the four fields the engine actually uses, independent of
-JSON field order or obsolete fields. Unchanged state costs zero advanced
-operations. Each actual state change costs one PUT. A notification is committed
-before sending and the final save is skipped. A failed push can cost a second
-PUT to roll back. Concurrent writes use the ETag from GET, with no conflict
-retry. A warm instance caches only committed JSON and revalidates its ETag on
-every ping, so another instance's notification is not hidden by a stale cache.
+The installed @vercel/blob 2.5.0 SDK uses authenticated GET for reads, with no
+HEAD or LIST. A warm process revalidates the persisted ETag on every ping, while
+keeping its unsaved live baseline. If another instance changed only the queue
+checkpoint, the lower observed baseline wins; an external notification's stamps
+and state take precedence. Writes use the ETag from GET and do not retry conflicts.
+SDK retries remain disabled only in this function process, without editing any
+environment file. No new storage service or config.json changes are needed.
 
-Storage failures return HTTP 200 with ok:false, sent:false, status:
-storage_unavailable and retryAfterSeconds:60. A warm instance skips storage
-attempts during that interval (storage_backoff). Other run failures return
-run_failed. Each failure logs one fixed line, never the raw error or credentials.
-Unauthorized calls still return 401. HTTP 200 means the scheduler reached the
-function; inspect ok/status to determine whether the notifier ran successfully.
+### Cold-start trade-off and shutdown
 
-For a public, entirely read-only deployment check, GET /api/notify?health=1
-returns ready without reading Blob, contacting WaniKani, or sending a push. It
-checks endpoint availability only. For an authenticated decision check, use
-dry=1; this reads state but never persists or sends.
+A restart can lose up to 30 minutes of queue drift. It must not use an outdated
+high count to suppress a small new batch indefinitely. On a cold load, keep all
+saved cooldown/lesson/review stamps but start the in-memory announced baseline
+at zero. This can repeat at most one batch notice per cold restart, after the
+existing DND and batch cooldown allow it. The normal warm-process schedule and
+message content are unchanged; a restart during cooldown can make that recovery
+notice slightly late. Once committed, that notice updates the saved stamps and
+the live baseline normally. Repeated separate cold starts can each incur this
+trade-off; Blob unavailability can delay recovery further.
 
-### Operation accounting and the 300/month constraint
+A best-effort SIGTERM handler attempts one conditional checkpoint of dirty state
+only while idle, using a 400 ms timeout. Vercel allows just 500 ms of function
+cleanup, so the application does not depend on this write completing. Busy
+notifications, failed storage backoff, unchanged state, and dry-only sessions do
+not flush on shutdown. No beforeExit or periodic background timer is used.
+See [Vercel's SIGTERM documentation](https://vercel.com/docs/functions/functions-api-reference#sigterm-signal).
 
-Run npm test (includes engine, mocked handler, and real SDK transport tests).
-The handler's 1,440-ping simulations report:
+### Mocked operation counts
 
-| Day | GET | PUT (advanced) | LIST / HEAD |
+Run npm test for all existing checks, engine tests, handler simulations, and the
+installed SDK transport test. Each day below includes all 1,440 minute pings.
+
+| Traffic | v1.1.1 PUT/day | v1.1.2 PUT/day | Three-day PUT total |
 | --- | ---: | ---: | ---: |
-| Unchanged queue | 1,440 | 0 | 0 / 0 |
-| Four batches, study 20 items minute by minute after each | 1,440 | 84 | 0 / 0 |
+| Unchanged queue | 0 | 0 | 0 |
+| Existing stress trace: four 20-review batches, one completion/minute | 84 | 8 | 24 |
+| Same trace with deployed DND/cooldown/threshold config | not separately measured | 6 | 18 |
+| Lesson nudge plus a persistent review backlog | not separately measured | 9 | not separately measured |
 
-Formula: daily advanced operations = notifications + observed queue decreases
-+ successful rollback writes. Cold starts do not themselves cause writes.
-With four notices and four queue decreases/day: 8/day, 240/30 days. With the
-minute-by-minute study fixture: 84/day, 2,520/30 days. These are examples, not a
-forecast of the user's actual activity. GET is a simple operation on a cache
-miss; 1,440 GET/day would be 43,200 simple operations/month if all missed cache.
-ETag 304 responses reduce downloaded bytes, not a guaranteed billed operation
-count. Server cache hits and cold starts affect actual simple-operation usage.
+The existing stress trace now costs four notification saves plus four delayed
+queue checkpoints = 8 PUT/day, or about 240 PUT per 30-day month (previously
+2,520). Every warm-process notice time and payload is compared with the unchanged
+engine using immediately updated reference state. Each tested day is below the
+25 PUT/day target (750 per 30-day month).
 
-A guaranteed total below 300 advanced operations/month cannot be obtained with
-Blob alone while keeping exact notification behavior: every observed queue
-decrease must survive a function restart or the next new batch can be missed.
-An in-memory-only baseline or delayed writes would change that behavior. A
-durable database is needed to remove this limitation without changing notices.
-The previous handler already skipped identical JSON writes, so no honest
-50-215/day to <10/day reduction can be claimed from this patch alone.
+This is a traffic-tested target, not a hard daily quota: notification saves always
+take priority, sustained queue changes can occupy more 30-minute windows, and
+cold starts, shutdown checkpoints, rollback writes, or failures can add writes.
+No notice is dropped to enforce an arbitrary daily cap. The tests also cover no
+write inside the window, a write after it, immediate notification commits, cold
+recovery with at most one repeat, read/write soft failures, and bounded shutdown.
 
-The supplied store-wide 1,434 advanced operations are not all attributable to
-this notifier: api/data.js and api/sync.js also LIST, and custom-study writes
-backups. Those paths and all WaniKani data are unchanged in this patch.
+GET remains 1,440 requests/day and is a simple operation on a cache miss, not an
+advanced one. ETags reduce downloaded bytes; actual billed simple operations
+depend on Vercel cache hits. Other users of this Blob store (dashboard LISTs,
+sync, custom-study backups) have their own operations and are unchanged.
 
-Billing definitions: https://vercel.com/docs/vercel-blob/usage-and-pricing
-SDK reference: https://vercel.com/docs/vercel-blob/using-blob-sdk
+### Error and deployment checks
+
+Storage failures return HTTP 200, ok:false, sent:false,
+status:storage_unavailable, retryAfterSeconds:60. A warm process preserves its
+live state and skips storage attempts during that backoff. Other run failures
+return run_failed. A failed pre-send write never marks an unsent notice as
+successful in memory. One fixed error line is logged, without raw credential
+URLs. Unauthorized requests still return 401.
+
+Public GET /api/notify?health=1 returns the deployed version and ready status,
+without Blob, WaniKani, or ntfy calls. It proves availability/version only.
+Authenticated dry=1 evaluates decisions but never saves, sends, or creates
+shutdown writes. To resume scheduling, sign into cron-job.org yourself and
+re-enable WaniKani notifier with its existing URL, headers, and schedule.
+
+[Blob billing](https://vercel.com/docs/vercel-blob/usage-and-pricing) and
+[SDK reference](https://vercel.com/docs/vercel-blob/using-blob-sdk).
