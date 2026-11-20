@@ -32,10 +32,20 @@ export function createHandler({ blobPut = blobPutDefault, blobGet = blobGetDefau
       const body = req.body ?? {};
       if (Buffer.byteLength(JSON.stringify(body)) > 2 * 1024 * 1024) return res.status(413).json({ error: 'Payload too large' });
       const merged = mergeCustomStudy(existing, body);
+      // The Blob store allows only 2,000 writes a month on the Hobby plan: an identical merge writes nothing.
+      if (existing.updatedAt && stable({ srsState: existing.srsState ?? {}, alternates: existing.alternates ?? {}, reviewLog: existing.reviewLog ?? [] }) === stable(merged)) {
+        return res.status(200).json({ srsState: merged.srsState, alternates: merged.alternates, logCount: merged.reviewLog.length, updatedAt: existing.updatedAt, unchanged: true });
+      }
       const updatedAt = new Date().toISOString();
       await blobPut(pathname, JSON.stringify({ ...merged, updatedAt }), { access: 'private', addRandomSuffix: false, allowOverwrite: true });
       return res.status(200).json({ srsState: merged.srsState, alternates: merged.alternates, logCount: merged.reviewLog.length, updatedAt });
     } catch (e) { return res.status(500).json({ error: e.message }); }
   };
+}
+// Key-order independent JSON, so the same data always compares equal.
+function stable(value) {
+  if (Array.isArray(value)) return `[${value.map(stable).join(',')}]`;
+  if (value && typeof value === 'object') return `{${Object.keys(value).sort().map(k => `${JSON.stringify(k)}:${stable(value[k])}`).join(',')}}`;
+  return JSON.stringify(value);
 }
 export default createHandler();
